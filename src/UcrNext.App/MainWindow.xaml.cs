@@ -172,7 +172,7 @@ public partial class MainWindow : Window
     private void BindExtra_Click(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is not BindingVm.ExtraSlot slot) return;
-        var dlg = new BindDialog(_vm.Services.Inputs, _vm.InterceptionRunning) { Owner = this };
+        var dlg = new BindDialog(_vm.Services.Inputs, _vm.InterceptionRunning, _vm.Services.Hooks.DrainDiagnostics) { Owner = this };
         if (dlg.ShowDialog() == true && dlg.Captured is { } input) slot.Owner.SetExtra(slot.Index, input);
     }
 
@@ -183,7 +183,7 @@ public partial class MainWindow : Window
 
     private void BindInput(BindingVm binding)
     {
-        var dlg = new BindDialog(_vm.Services.Inputs, _vm.InterceptionRunning) { Owner = this };
+        var dlg = new BindDialog(_vm.Services.Inputs, _vm.InterceptionRunning, _vm.Services.Hooks.DrainDiagnostics) { Owner = this };
         if (dlg.ShowDialog() == true && dlg.Captured is { } input) binding.SetInput(input);
     }
 }

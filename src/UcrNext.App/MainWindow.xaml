@@ -179,6 +179,9 @@
                                                 <CheckBox Content="Block" IsChecked="{Binding Block}"
                                                           Visibility="{Binding IsBlockable, Converter={StaticResource BoolToVis}}"
                                                           ToolTip="While mapping is on, the original key/button does not reach other programs." />
+                                                <TextBlock Text="can't block" Foreground="#FF999999" FontStyle="Italic" VerticalAlignment="Center"
+                                                           Visibility="{Binding ShowBlockHint, Converter={StaticResource BoolToVis}}"
+                                                           ToolTip="This key is bound to one specific keyboard/mouse through Raw Input, which can only watch input. To block it: bind it from 'any keyboard' (blocks it on all keyboards), or turn on Settings → Use Interception driver and bind it again (blocks it on that keyboard only)." />
                                                 <CheckBox Content="Full range" IsChecked="{Binding TriggerFullRange}"
                                                           Visibility="{Binding CanUseFullRange, Converter={StaticResource BoolToVis}}"
                                                           ToolTip="Use the whole axis travel for the trigger (pedals): fully released = 0%, fully pressed = 100%." />

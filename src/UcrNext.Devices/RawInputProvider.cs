@@ -241,6 +241,7 @@ public sealed class RawInputProvider : IInputProvider, IDeltaSource, IDisposable
     public IEnumerable<(InputRef Input, double Value)> ReadAll()
     {
         var list = new List<(InputRef, double)>();
+        var anyKeys = new HashSet<int>();
         long now = Environment.TickCount64;
         lock (_lock)
         {
@@ -249,7 +250,17 @@ public sealed class RawInputProvider : IInputProvider, IDeltaSource, IDisposable
                 if (d.IsKeyboard)
                 {
                     for (int k = 0; k < MaxKey; k++)
-                        if (d.Keys![k]) list.Add((new InputRef(d.Id, InputKind.Button, k, $"{d.Name} Key {InterceptionProvider.KeyName(k)}"), 1));
+                    {
+                        if (!d.Keys![k]) continue;
+                        list.Add((new InputRef(d.Id, InputKind.Button, k, $"{d.Name} Key {InterceptionProvider.KeyName(k)}"), 1));
+                        // Also report it as an "any keyboard" key (same virtual-key code the hook uses).
+                        // Windows stops sending keys to the low-level keyboard hook while one of our own
+                        // windows has focus once Raw Input keyboards are registered — exactly when the user
+                        // presses a key in the bind dialog — so the hook alone can't see these.
+                        int vk = KeyMapping.ScanToVk((k & 0xFF) | ((k & 0x100) != 0 ? 0xE000 : 0));
+                        if (vk != 0 && anyKeys.Add(vk))
+                            list.Add((new InputRef(KeyboardMouseHookProvider.KeyboardId, InputKind.Button, vk, "Key " + VirtualKeys.Name(vk)), 1));
+                    }
                     continue;
                 }
                 list.Add((new InputRef(d.Id, InputKind.Delta, 0, $"{d.Name} movement X"), Math.Clamp(d.BindX / 20.0, -1, 1)));

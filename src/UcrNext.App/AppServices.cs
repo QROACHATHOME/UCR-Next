@@ -22,6 +22,12 @@ public sealed class AppServices : IDisposable
 
     public event Action<Exception>? EngineError;
 
+    /// <summary>
+    /// Cached: checking it runs schtasks.exe, which must not happen on every status refresh
+    /// (the UI thread has to stay responsive). Updated when the user changes it.
+    /// </summary>
+    public Autostart.Mode AutostartMode { get; set; } = Autostart.Current();
+
     /// <summary>Must be constructed on the UI thread (the keyboard/mouse hooks need its message loop).</summary>
     public AppServices(string? profileDirectory, string settingsPath)
     {
@@ -76,7 +82,10 @@ public sealed class AppServices : IDisposable
         yield return DirectInput?.Status ?? "DirectInput unavailable (using WinMM fallback)";
         yield return Interception?.Status ?? "Interception: off (enable in Settings)";
         yield return "Devices: " + string.Join(", ", Inputs.Devices.Select(d => d.Name));
-        yield return "Autostart: " + Autostart.Current();
+        var (physical, injected) = Hooks.KeyEvents;
+        yield return $"Keyboard/mouse hooks: {(Hooks.IsInstalled ? "installed" : "NOT installed")}, " +
+                     $"key events: {physical} from keyboards, {injected} from software (ignored)";
+        yield return "Autostart: " + AutostartMode;
         yield return "Profiles folder: " + Store.Directory;
     }
 

@@ -82,7 +82,7 @@ public sealed class BindingVm : Observable
         if (Model.Name is "" or "New binding") Model.Name = input.Label;
         if (!IsBlockable) Model.Block = false;
         Raise(nameof(InputText)); Raise(nameof(Name)); Raise(nameof(IsAnalogInput)); Raise(nameof(IsBlockable)); Raise(nameof(Block));
-        Raise(nameof(CanUseFullRange));
+        Raise(nameof(CanUseFullRange)); Raise(nameof(ShowBlockHint));
         _changed(this);
     }
 
@@ -92,6 +92,10 @@ public sealed class BindingVm : Observable
     public bool IsBlockable => Model.Input?.DeviceId is { } id &&
         (id == KeyboardMouseHookProvider.KeyboardId || id == KeyboardMouseHookProvider.MouseId ||
          id.StartsWith(InterceptionProvider.KeyboardPrefix) || id.StartsWith(InterceptionProvider.MousePrefix));
+
+    /// <summary>Per-device keyboard/mouse through Raw Input: blocking isn't possible, so say why.</summary>
+    public bool ShowBlockHint => Model.Input?.DeviceId is { } id &&
+        (id.StartsWith(RawInputProvider.KeyboardPrefix) || (id.StartsWith(RawInputProvider.MousePrefix) && Model.Input.Kind == InputKind.Button));
 
     public OutputOption? SelectedOutput
     {
@@ -313,7 +317,7 @@ public sealed class MainViewModel : Observable
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _refreshTimer.Tick += (_, _) => Refresh();
         _refreshTimer.Start();
-        _autostart = Autostart.Current();
+        _autostart = _s.AutostartMode;
         Refresh();
 
         var ui = Dispatcher.CurrentDispatcher; // constructed on the UI thread
@@ -390,7 +394,7 @@ public sealed class MainViewModel : Observable
     public void SetAutostart(Autostart.Mode mode)
     {
         var err = Autostart.Set(mode);
-        _autostart = Autostart.Current();
+        _autostart = _s.AutostartMode = Autostart.Current();
         Raise(nameof(AutostartOff)); Raise(nameof(AutostartLogon)); Raise(nameof(AutostartElevated));
         Status = err is null ? $"Start with Windows: {_autostart}" : "Start with Windows: " + err;
     }

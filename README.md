@@ -205,6 +205,11 @@ tests/UcrNext.Core.Tests  xUnit tests (engine, per-app, blocking, vJoy, commands
 ## Known limitations
 
 - Blocking applies to keyboard keys and mouse buttons, not to gamepads (that would need HidHide).
+- "Any keyboard" key mappings don't fire while UCR-Next's own window has focus (Windows stops
+  feeding the keyboard hook to a program that registered Raw Input keyboards while it is in front).
+  Press-to-bind is not affected, and games/other programs in front work normally.
+- Press-to-bind writes what it saw to `%LOCALAPPDATA%\UCR-Next\bind-debug.log` — attach it when
+  reporting a binding problem.
 - Third-party XInput pads may appear twice (XInput and DirectInput); bind the XInput one.
 - DirectInput reports only the axes a device exposes to DirectInput, which can be fewer than vJoy's
   own configuration shows.

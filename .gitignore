@@ -10,3 +10,8 @@ publish/
 Backup/
 UpgradeLog*.htm
 _UpgradeReport_Files/
+
+# Build archives
+*.rar
+*.zip
+*.7z

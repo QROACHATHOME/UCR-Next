@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Threading;
 using UcrNext.Core;
@@ -25,13 +26,18 @@ public partial class BindDialog : Window
 
     public InputRef? Captured { get; private set; }
 
-    public BindDialog(CompositeInputSource inputs, bool interceptionRunning)
+    private readonly Func<string>? _hookDiag;
+
+    public BindDialog(CompositeInputSource inputs, bool interceptionRunning, Func<string>? hookDiagnostics = null)
     {
+        _hookDiag = hookDiagnostics;
         InitializeComponent();
         _inputs = inputs;
         // Per-device mice work through Raw Input even without Interception, so always offer the choice.
         _interception = interceptionRunning;
         foreach (var (input, value) in inputs.ReadAll()) _baseline[input] = value;
+        Log($"--- bind dialog opened (Interception {(interceptionRunning ? "on" : "off")}); held at start: " +
+            string.Join(" ", _baseline.Where(kv => kv.Value >= Threshold && kv.Key.Kind == InputKind.Button).Select(kv => $"{kv.Key.DeviceId}/{kv.Key.Index}")));
         _timer = new DispatcherTimer(TimeSpan.FromMilliseconds(15), DispatcherPriority.Input, (_, _) => Check(), Dispatcher);
         Closed += (_, _) => _timer.Stop();
     }
@@ -44,7 +50,11 @@ public partial class BindDialog : Window
         bool anyDevice = AnyDeviceBox.IsChecked == true;
         bool movement = MovementBox.IsChecked == true;
 
-        foreach (var (input, value) in _inputs.ReadAll())
+        var all = _inputs.ReadAll().ToList();
+        LogTick(all, anyDevice);
+        // The same key can be reported twice as "any keyboard" (by Raw Input and by the hook); one is enough.
+        all = all.GroupBy(x => x.Input).Select(g => (g.Key, g.Max(x => x.Value))).ToList();
+        foreach (var (input, value) in all)
         {
             if (input.Kind == InputKind.Delta)
             {
@@ -82,9 +92,40 @@ public partial class BindDialog : Window
             if (!anyDevice && _interception && ((rawKb) || (rawMouse && !wheel))) continue;
 
             Captured = input;
+            Log($"captured {input.DeviceId} {input.Kind} {input.Index} ({input.Label})");
             DialogResult = true;
             return;
         }
+    }
+
+    // ---- diagnostics: %LOCALAPPDATA%\UCR-Next\bind-debug.log (last ~200 KB) ----
+
+    private static readonly string LogPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "UCR-Next", "bind-debug.log");
+    private string _lastSeen = "";
+
+    /// <summary>Logs the pressed buttons/keys each tick, but only when that set changes.</summary>
+    private void LogTick(List<(InputRef Input, double Value)> all, bool anyDevice)
+    {
+        var pressed = all.Where(x => x.Input.Kind == InputKind.Button && x.Value >= Threshold)
+            .Select(x => $"{x.Input.DeviceId}/{x.Input.Index}" + (_baseline.TryGetValue(x.Input, out var b) && b >= Threshold ? "(held at start)" : ""))
+            .ToList();
+        string seen = string.Join(" ", pressed);
+        if (seen == _lastSeen) return;
+        _lastSeen = seen;
+        Log($"anyDevice={anyDevice} pressed: {(seen.Length == 0 ? "-" : seen)}");
+        if (_hookDiag is not null) Log("    hook: " + _hookDiag());
+    }
+
+    private void Log(string line)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
+            if (File.Exists(LogPath) && new FileInfo(LogPath).Length > 200_000) File.Delete(LogPath);
+            File.AppendAllText(LogPath, $"{DateTime.Now:HH:mm:ss.fff} {line}{Environment.NewLine}");
+        }
+        catch { /* diagnostics must never break binding */ }
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e) => DialogResult = false;
