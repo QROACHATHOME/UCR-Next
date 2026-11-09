@@ -30,6 +30,15 @@ public sealed class XInputProvider : IInputProvider
 
     public static string DeviceId(int slot) => $"xinput:{slot}";
 
+    /// <summary>Slots (0-3) that currently have a controller, read directly from XInput.</summary>
+    public static HashSet<int> ConnectedSlots()
+    {
+        var set = new HashSet<int>();
+        for (int i = 0; i < 4; i++)
+            if (XInputGetState((uint)i, out _) == 0) set.Add(i);
+        return set;
+    }
+
     public void Poll()
     {
         long now = Environment.TickCount64;

@@ -43,16 +43,36 @@ public sealed class ViGEmPadOutput : IVirtualPadOutput, IDisposable
     public bool IsAvailable => _client is not null;
     public string Status { get; private set; }
 
-    /// <summary>XInput slot taken by our virtual pad, once Windows has assigned one.</summary>
+    private HashSet<int>? _slotsBeforeConnect;
+    private long _resolveDeadline;
+
+    /// <summary>
+    /// XInput slot taken by our virtual pad, once known. ViGEm's own UserIndex is not
+    /// trusted: with a physical pad in slot 0 it was observed to report 0 while the virtual
+    /// pad actually sat in slot 1, which hid the real controller. Instead the slot that
+    /// newly appears after plugging in is used.
+    /// </summary>
     public int? UserIndex
     {
         get
         {
             lock (_lock)
             {
-                if (_userIndex is null && _pad is not null)
+                if (_userIndex is null && _pad is not null && _slotsBeforeConnect is not null)
                 {
-                    try { _userIndex = _pad.UserIndex; } catch { /* not assigned yet */ }
+                    var added = XInputProvider.ConnectedSlots();
+                    added.ExceptWith(_slotsBeforeConnect);
+                    if (added.Count == 1)
+                    {
+                        _userIndex = added.First();
+                        Status = $"Virtual Xbox 360 pad connected (XInput slot {_userIndex + 1}, hidden from inputs)";
+                    }
+                    else if (Environment.TickCount64 > _resolveDeadline)
+                    {
+                        // Ambiguous (e.g. a real pad was plugged at the same moment): give up and hide nothing.
+                        _slotsBeforeConnect = null;
+                        Status = "Virtual Xbox 360 pad connected (XInput slot unknown)";
+                    }
                 }
                 return _userIndex;
             }
@@ -68,6 +88,9 @@ public sealed class ViGEmPadOutput : IVirtualPadOutput, IDisposable
             {
                 try
                 {
+                    _slotsBeforeConnect = XInputProvider.ConnectedSlots();
+                    _resolveDeadline = Environment.TickCount64 + 3000;
+                    _userIndex = null;
                     _pad = _client.CreateXbox360Controller();
                     _pad.AutoSubmitReport = false;
                     _pad.Connect();
@@ -97,6 +120,7 @@ public sealed class ViGEmPadOutput : IVirtualPadOutput, IDisposable
             try { _pad.Disconnect(); } catch { /* already gone */ }
             _pad = null;
             _userIndex = null;
+            _slotsBeforeConnect = null;
             if (_client is not null) Status = "ViGEmBus ready";
         }
     }
