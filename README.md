@@ -214,3 +214,7 @@ tests/UcrNext.Core.Tests  xUnit tests (engine, per-app, blocking, vJoy, commands
 - DirectInput reports only the axes a device exposes to DirectInput, which can be fewer than vJoy's
   own configuration shows.
 - No plugin system yet.
+
+## License
+
+MIT — see [LICENSE](LICENSE). UCR-Next contains no code from UCR; UCR's open-source code was only read to understand its `context.xml` format and plugin behaviour so profiles import faithfully. Third-party drivers (ViGEmBus, vJoy, Interception) are not included and keep their own licenses.
