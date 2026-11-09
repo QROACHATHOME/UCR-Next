@@ -1,0 +1,138 @@
+<Window x:Class="UcrNext.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:UcrNext.App"
+        Title="UCR-Next — Universal Control Remapper" Width="1280" Height="720" MinWidth="900" MinHeight="450">
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis" />
+    </Window.Resources>
+    <DockPanel>
+        <!-- Top bar -->
+        <Border DockPanel.Dock="Top" Background="#FFF2F2F2" BorderBrush="#FFD0D0D0" BorderThickness="0,0,0,1" Padding="6">
+            <DockPanel>
+                <ToggleButton DockPanel.Dock="Left" MinWidth="140" Padding="10,4" FontWeight="Bold"
+                              IsChecked="{Binding IsMapping}" Content="{Binding MappingButtonText}" />
+                <TextBlock DockPanel.Dock="Right" VerticalAlignment="Center" Margin="10,0" Foreground="#FF555555"
+                           Text="{Binding PadStatus}" />
+                <TextBlock />
+            </DockPanel>
+        </Border>
+
+        <!-- Status bar -->
+        <StatusBar DockPanel.Dock="Bottom">
+            <StatusBarItem>
+                <TextBlock Text="{Binding Status}" />
+            </StatusBarItem>
+        </StatusBar>
+
+        <Grid Margin="6">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="220" />
+                <ColumnDefinition Width="5" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="5" />
+                <ColumnDefinition Width="260" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Profiles -->
+            <DockPanel Grid.Column="0">
+                <TextBlock DockPanel.Dock="Top" Text="Profiles" FontWeight="Bold" Margin="2,0,0,4" />
+                <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal">
+                    <Button Content="Add" Click="AddProfile_Click" />
+                    <Button Content="Delete" Click="DeleteProfile_Click" />
+                </StackPanel>
+                <ListBox ItemsSource="{Binding Profiles}" SelectedItem="{Binding Selected}" HorizontalContentAlignment="Stretch">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate DataType="{x:Type local:ProfileVm}">
+                            <DockPanel>
+                                <CheckBox DockPanel.Dock="Left" VerticalAlignment="Center" Margin="0,0,4,0"
+                                          IsChecked="{Binding Enabled}" ToolTip="Profile enabled" />
+                                <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" BorderThickness="0" Background="Transparent" />
+                            </DockPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+
+            <GridSplitter Grid.Column="1" HorizontalAlignment="Stretch" />
+
+            <!-- Bindings of the selected profile -->
+            <DockPanel Grid.Column="2" DataContext="{Binding Selected}">
+                <DockPanel DockPanel.Dock="Top" Margin="2,0,0,4">
+                    <Button DockPanel.Dock="Right" Content="+ Add binding" Click="AddBinding_Click" />
+                    <TextBlock VerticalAlignment="Center" FontWeight="Bold">
+                        <Run Text="Bindings — " /><Run Text="{Binding Name, Mode=OneWay}" />
+                    </TextBlock>
+                </DockPanel>
+                <Grid DockPanel.Dock="Top" Margin="4,0,24,2" TextElement.Foreground="#FF666666">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="24" /><ColumnDefinition Width="2*" /><ColumnDefinition Width="3*" />
+                        <ColumnDefinition Width="3*" /><ColumnDefinition Width="150" /><ColumnDefinition Width="32" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="1" Text="Name" />
+                    <TextBlock Grid.Column="2" Text="Input (press Bind…)" />
+                    <TextBlock Grid.Column="3" Text="Output" />
+                    <TextBlock Grid.Column="4" Text="Deadzone / Sensitivity / Invert" />
+                </Grid>
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <ItemsControl ItemsSource="{Binding Bindings}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="{x:Type local:BindingVm}">
+                                <Border BorderBrush="#FFDDDDDD" BorderThickness="0,0,0,1" Padding="4">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="24" /><ColumnDefinition Width="2*" /><ColumnDefinition Width="3*" />
+                                            <ColumnDefinition Width="3*" /><ColumnDefinition Width="150" /><ColumnDefinition Width="32" />
+                                        </Grid.ColumnDefinitions>
+                                        <CheckBox Grid.Column="0" VerticalAlignment="Center" IsChecked="{Binding Enabled}" ToolTip="Binding enabled" />
+                                        <TextBox Grid.Column="1" Margin="2" VerticalContentAlignment="Center"
+                                                 Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" />
+                                        <DockPanel Grid.Column="2" Margin="2">
+                                            <Button DockPanel.Dock="Right" Content="Bind…" Click="BindInput_Click" />
+                                            <TextBlock VerticalAlignment="Center" Text="{Binding InputText}" TextTrimming="CharacterEllipsis"
+                                                       ToolTip="{Binding InputText}" />
+                                        </DockPanel>
+                                        <ComboBox Grid.Column="3" Margin="2" ItemsSource="{Binding Outputs}"
+                                                  SelectedItem="{Binding SelectedOutput}" DisplayMemberPath="Display"
+                                                  IsTextSearchEnabled="True" TextSearch.TextPath="Display" />
+                                        <StackPanel Grid.Column="4" Margin="2">
+                                            <StackPanel Orientation="Horizontal" Visibility="{Binding IsAnalogInput, Converter={StaticResource BoolToVis}}">
+                                                <Slider Width="70" Minimum="0" Maximum="0.9" Value="{Binding Deadzone}"
+                                                        ToolTip="{Binding Deadzone}" TickFrequency="0.05" IsSnapToTickEnabled="True" />
+                                                <Slider Width="70" Minimum="0.1" Maximum="3" Value="{Binding Sensitivity}"
+                                                        ToolTip="{Binding Sensitivity}" TickFrequency="0.05" IsSnapToTickEnabled="True" />
+                                            </StackPanel>
+                                            <CheckBox Content="Invert" IsChecked="{Binding Invert}" />
+                                        </StackPanel>
+                                        <Button Grid.Column="5" Content="✕" Padding="4,0" ToolTip="Delete binding" Click="DeleteBinding_Click" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </DockPanel>
+
+            <GridSplitter Grid.Column="3" HorizontalAlignment="Stretch" />
+
+            <!-- Devices -->
+            <DockPanel Grid.Column="4">
+                <TextBlock DockPanel.Dock="Top" Text="Detected devices" FontWeight="Bold" Margin="2,0,0,4" />
+                <TextBlock DockPanel.Dock="Bottom" TextWrapping="Wrap" Foreground="#FF777777" Margin="2,4"
+                           Text="Devices refresh every 2 seconds. Xbox controllers are read via XInput; other gamepads, sticks and wheels via DirectInput/HID." />
+                <ListBox ItemsSource="{Binding Devices}">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Margin="0,2">
+                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                <TextBlock Foreground="#FF777777" FontSize="11">
+                                    <Run Text="{Binding Provider, Mode=OneWay}" /><Run Text=" · " /><Run Text="{Binding DeviceId, Mode=OneWay}" />
+                                </TextBlock>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+        </Grid>
+    </DockPanel>
+</Window>
