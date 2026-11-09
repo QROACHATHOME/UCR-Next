@@ -23,7 +23,9 @@ public sealed class DirectInputProvider : IInputProvider, IDisposable
     private sealed class Pad
     {
         public required IDirectInputDevice8 Device;
-        public required string DeviceId;
+        public required Guid Instance;
+        public required int Vid, Pid;
+        public string DeviceId = "";
         public required string BaseName;
         public string Name = "";
         public int Buttons, Povs;
@@ -59,7 +61,8 @@ public sealed class DirectInputProvider : IInputProvider, IDisposable
     public string Name => "DirectInput";
     public IReadOnlyList<DeviceInfo> Devices => _devices;
 
-    public static string DeviceId(Guid instance) => "dinput:" + instance.ToString("D");
+    /// <summary>"dinput:046D:C24F#1" — vendor id, product id, 1-based instance among identical devices.</summary>
+    public static string DeviceId(int vid, int pid, int instance) => $"dinput:{vid:X4}:{pid:X4}#{instance}";
 
     public void Poll()
     {
@@ -106,24 +109,29 @@ public sealed class DirectInputProvider : IInputProvider, IDisposable
         List<Pad> old;
         lock (_lock) old = _pads;
         var keep = new List<Pad>();
-        var seen = new HashSet<string>();
 
+        var seen = new HashSet<Guid>();
         foreach (var inst in found)
         {
-            string id = DeviceId(inst.InstanceGuid);
-            seen.Add(id);
-            var existing = old.FirstOrDefault(p => p.DeviceId == id);
+            seen.Add(inst.InstanceGuid);
+            var existing = old.FirstOrDefault(p => p.Instance == inst.InstanceGuid);
             if (existing is not null) { keep.Add(existing); continue; }
 
-            var pad = TryOpen(inst, id);
+            var pad = TryOpen(inst);
             if (pad is not null) keep.Add(pad);
         }
-        foreach (var gone in old.Where(p => !seen.Contains(p.DeviceId)))
+        foreach (var gone in old.Where(p => !seen.Contains(p.Instance)))
         {
             try { gone.Device.Unacquire(); gone.Device.Dispose(); } catch { }
         }
 
-        // Identical controllers get "#2", "#3"… so they can be told apart in the UI.
+        // Ids are VID/PID + instance number (like UCR), so they survive moving the device to
+        // another USB port. Identical controllers get "#2", "#3"… in both id and name.
+        foreach (var group in keep.GroupBy(p => (p.Vid, p.Pid)))
+        {
+            int n = 0;
+            foreach (var p in group) p.DeviceId = DeviceId(p.Vid, p.Pid, ++n);
+        }
         foreach (var group in keep.GroupBy(p => p.BaseName))
         {
             int n = 0;
@@ -137,7 +145,7 @@ public sealed class DirectInputProvider : IInputProvider, IDisposable
         }
     }
 
-    private Pad? TryOpen(DeviceInstance inst, string id)
+    private Pad? TryOpen(DeviceInstance inst)
     {
         IDirectInputDevice8? dev = null;
         try
@@ -150,7 +158,9 @@ public sealed class DirectInputProvider : IInputProvider, IDisposable
             try { dev.SetCooperativeLevel(IntPtr.Zero, CooperativeLevel.NonExclusive | CooperativeLevel.Background); } catch { }
             dev.SetDataFormat<RawJoystickState>();
 
-            var pad = new Pad { Device = dev, DeviceId = id, BaseName = inst.ProductName.Trim() };
+            int vid = 0, pid = 0;
+            try { vid = dev.Properties.VendorId; pid = dev.Properties.ProductId; } catch { }
+            var pad = new Pad { Device = dev, Instance = inst.InstanceGuid, Vid = vid, Pid = pid, BaseName = inst.ProductName.Trim() };
             foreach (var obj in dev.GetObjects(DeviceObjectTypeFlags.Axis))
             {
                 int slot = AxisSlot(obj.ObjectType, obj.Offset);

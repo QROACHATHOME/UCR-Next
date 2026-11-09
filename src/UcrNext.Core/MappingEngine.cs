@@ -14,7 +14,7 @@ public sealed class MappingEngine
     /// <summary>Mouse movement in pixels per tick at full deflection and sensitivity 1.</summary>
     public const double MousePixelsPerTick = 6.0;
 
-    private sealed record CompiledProfile(string Name, string[] Apps, Binding[] Bindings);
+    private sealed record CompiledProfile(string Name, string[] Apps, DeviceMatch[] Skip, Binding[] Bindings);
 
     private static readonly HashSet<InputRef> NoBlocks = new();
 
@@ -28,6 +28,23 @@ public sealed class MappingEngine
     private bool _profilesChanged = true;
     private string _activeKey = "\0";
     private string? _lastFg;
+    private volatile IReadOnlyCollection<DeviceInfo> _connected = Array.Empty<DeviceInfo>();
+    private IReadOnlyCollection<DeviceInfo>? _lastDevices;
+    private string[] _skippedNames = Array.Empty<string>();
+    private string _connectedKey = "";
+
+    /// <summary>Profiles that apply to the foreground app but are skipped because a listed device is connected.</summary>
+    public IReadOnlyList<string> SkippedProfileNames { get { lock (_gate) return _skippedNames; } }
+
+    /// <summary>Tells the engine which devices are plugged in (for "skip if device present" rules).</summary>
+    public void SetConnectedDevices(IEnumerable<DeviceInfo> devices)
+    {
+        var list = devices.ToList();
+        string key = string.Join("\n", list.Select(d => d.DeviceId + "\t" + d.Name));
+        if (key == _connectedKey) return;
+        _connectedKey = key;
+        _connected = list;
+    }
     private Binding[] _bindings = Array.Empty<Binding>();
     private string[] _activeNames = Array.Empty<string>();
     private volatile HashSet<InputRef> _blocked = NoBlocks;
@@ -78,6 +95,7 @@ public sealed class MappingEngine
             .Select(p => new CompiledProfile(
                 p.Name,
                 p.Applications.Where(a => !string.IsNullOrWhiteSpace(a)).Select(Profile.NormalizeExe).ToArray(),
+                p.SkipIfDevicesPresent.Select(m => new DeviceMatch { DeviceId = m.DeviceId, Name = m.Name }).ToArray(),
                 p.Bindings.Where(b => b.Enabled && b.Input is not null && b.Output is not null).Select(Clone).ToArray()))
             .ToArray();
         lock (_gate)
@@ -119,12 +137,27 @@ public sealed class MappingEngine
             foreach (var b in _bindings)
             {
                 if (!_input.TryRead(b.Input!, out double raw)) continue;
-                double v = AxisProcessor.Shape(raw, b.Settings);
                 var o = b.Output!;
+                var s = b.Settings;
+                double v;
+                bool pressed;
+                if (b.Input!.Kind == InputKind.Button)
+                {
+                    // Buttons: Invert means "active while released"; driving an axis uses the
+                    // configured pressed/released values.
+                    pressed = (raw >= 0.5) != s.Invert;
+                    v = pressed ? s.ButtonAxisPressed : s.ButtonAxisReleased;
+                }
+                else
+                {
+                    v = AxisProcessor.Shape(raw, s);
+                    pressed = v >= s.ButtonThreshold;
+                    if (o.IsTrigger && s.TriggerFullRange && b.Input.Kind == InputKind.Axis) v = (v + 1) / 2;
+                }
 
                 if (o.Kind == OutputKind.Button)
                 {
-                    if (v < b.Settings.ButtonThreshold) continue;
+                    if (!pressed) continue;
                     switch (o.Target)
                     {
                         case OutputTarget.Keyboard: keys.Add(o.Index); break;
@@ -144,8 +177,8 @@ public sealed class MappingEngine
                             if (Math.Abs(v) > Math.Abs(pad.Axes[o.Index])) pad.Axes[o.Index] = v;
                             break;
                         case OutputTarget.VJoy:
-                            var s = VJoyFor(vjoy, o.Device);
-                            if (Math.Abs(v) > Math.Abs(s.Axes[o.Index])) s.Axes[o.Index] = v;
+                            var vs = VJoyFor(vjoy, o.Device);
+                            if (Math.Abs(v) > Math.Abs(vs.Axes[o.Index])) vs.Axes[o.Index] = v;
                             break;
                         case OutputTarget.Mouse when o.Index == (int)MouseAxis.X: mx += v; break;
                         case OutputTarget.Mouse: my += v; break;
@@ -185,17 +218,22 @@ public sealed class MappingEngine
     private void RefreshActive()
     {
         string? fg = _foreground;
-        if (!_profilesChanged && fg == _lastFg) return;
+        var devices = _connected;
+        if (!_profilesChanged && fg == _lastFg && ReferenceEquals(devices, _lastDevices)) return;
         _lastFg = fg;
-        var activeIdx = Enumerable.Range(0, _profiles.Length).Where(i => Profile.AppliesTo(_profiles[i].Apps, fg)).ToArray();
+        _lastDevices = devices;
+        var forApp = Enumerable.Range(0, _profiles.Length).Where(i => Profile.AppliesTo(_profiles[i].Apps, fg)).ToArray();
+        var skipped = forApp.Where(i => Profile.SkippedByDevices(_profiles[i].Skip, devices)).ToArray();
+        var activeIdx = forApp.Except(skipped).ToArray();
         var active = activeIdx.Select(i => _profiles[i]).ToArray();
-        string key = string.Join(",", activeIdx);
+        string key = string.Join(",", activeIdx) + "|" + string.Join(",", skipped);
         if (!_profilesChanged && key == _activeKey) return;
         _profilesChanged = false;
         _activeKey = key;
 
         _bindings = active.SelectMany(p => p.Bindings).ToArray();
         _activeNames = active.Select(p => p.Name).ToArray();
+        _skippedNames = skipped.Select(i => _profiles[i].Name).ToArray();
         _padUsed = _bindings.Any(b => b.Output!.Target == OutputTarget.Xbox360);
         var blocks = _bindings.Where(b => b.Block).Select(b => b.Input!).ToHashSet();
         _blockCandidates = blocks.Count == 0 ? NoBlocks : blocks;

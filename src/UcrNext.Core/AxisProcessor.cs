@@ -14,6 +14,9 @@ public static class AxisProcessor
         // Rescale so output starts at 0 just outside the deadzone and still reaches 1.
         v = Math.Sign(v) * (mag - dz) / (1.0 - dz);
 
+        double adz = Math.Clamp(s.AntiDeadzone, 0.0, 0.95);
+        if (adz > 0) v = Math.Sign(v) * (adz + (1.0 - adz) * Math.Abs(v));
+
         v *= s.Sensitivity;
         return Math.Clamp(v, -1.0, 1.0);
     }

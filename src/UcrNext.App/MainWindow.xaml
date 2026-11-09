@@ -11,6 +11,7 @@
             <MenuItem Header="_File">
                 <MenuItem Header="Hide to background" Click="HideWindow_Click" />
                 <MenuItem Header="Open profiles folder" Click="OpenProfiles_Click" />
+                <MenuItem Header="Import UCR profiles (context.xml)…" Click="ImportUcr_Click" />
                 <Separator />
                 <MenuItem Header="E_xit" Click="Exit_Click" />
             </MenuItem>
@@ -67,12 +68,6 @@
             <!-- Profiles -->
             <DockPanel Grid.Column="0">
                 <TextBlock DockPanel.Dock="Top" Text="Profiles" FontWeight="Bold" Margin="2,0,0,4" />
-                <StackPanel DockPanel.Dock="Bottom" Margin="0,6,0,0" DataContext="{Binding Selected}">
-                    <TextBlock Text="Only active while these programs are in front:" TextWrapping="Wrap" Foreground="#FF555555" />
-                    <TextBox Margin="0,2" Text="{Binding ApplicationsText, UpdateSourceTrigger=LostFocus}"
-                             ToolTip="Comma-separated, e.g. game.exe, emulator.exe. Leave empty to use the profile everywhere." />
-                    <Button HorizontalAlignment="Left" Content="Add running program ▾" Click="AddApp_Click" />
-                </StackPanel>
                 <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal">
                     <Button Content="Add" Click="AddProfile_Click" />
                     <Button Content="Delete" Click="DeleteProfile_Click" />
@@ -86,6 +81,7 @@
                                 <StackPanel>
                                     <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" BorderThickness="0" Background="Transparent" />
                                     <TextBlock Text="{Binding AppsSummary}" FontSize="10" Foreground="#FF888888" Margin="2,0" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Text="{Binding GamesSummary}" FontSize="10" Foreground="#FF5A7FB0" Margin="2,0" TextTrimming="CharacterEllipsis" />
                                 </StackPanel>
                             </DockPanel>
                         </DataTemplate>
@@ -103,6 +99,42 @@
                         <Run Text="Bindings — " /><Run Text="{Binding Name, Mode=OneWay}" />
                     </TextBlock>
                 </DockPanel>
+                <Expander DockPanel.Dock="Top" Header="Profile settings: programs, games, devices" Margin="0,0,0,6" IsExpanded="False">
+                    <Grid Margin="4,6,4,2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" /><ColumnDefinition Width="10" />
+                            <ColumnDefinition Width="*" /><ColumnDefinition Width="10" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="Only active while these programs are in front" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBox Margin="0,3" Text="{Binding ApplicationsText, UpdateSourceTrigger=LostFocus}"
+                                     ToolTip="Comma-separated, e.g. game.exe, emulator.exe. Leave empty to use the profile everywhere." />
+                            <Button HorizontalAlignment="Left" Content="Add running program ▾" Click="AddApp_Click" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="Games that use this profile (one per line)" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBox Margin="0,3" Height="64" AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
+                                     Text="{Binding GamesText, UpdateSourceTrigger=LostFocus}"
+                                     ToolTip="For your reference, and for launchers: 'ucrnext game &quot;Game name&quot;' enables the profile(s) listing that game." />
+                        </StackPanel>
+                        <StackPanel Grid.Column="4">
+                            <TextBlock Text="Skip this profile while connected" FontWeight="SemiBold" TextWrapping="Wrap"
+                                       ToolTip="If any of these devices is plugged in, the profile stays off and creates no virtual controller (e.g. your real wheel)." />
+                            <ItemsControl Margin="0,3" ItemsSource="{Binding SkipDevices}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <DockPanel Margin="0,1">
+                                            <Button DockPanel.Dock="Right" Content="✕" Padding="4,0" Margin="2,0" Click="RemoveSkipDevice_Click" ToolTip="Remove" />
+                                            <TextBlock VerticalAlignment="Center" Text="{Binding}" ToolTip="{Binding DeviceId}" TextTrimming="CharacterEllipsis" />
+                                        </DockPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <Button HorizontalAlignment="Left" Content="Add connected device ▾" Click="AddSkipDevice_Click" />
+                        </StackPanel>
+                    </Grid>
+                </Expander>
                 <Grid DockPanel.Dock="Top" Margin="4,0,24,2" TextElement.Foreground="#FF666666">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="24" /><ColumnDefinition Width="2*" /><ColumnDefinition Width="3*" />
@@ -146,6 +178,9 @@
                                                 <CheckBox Content="Block" IsChecked="{Binding Block}"
                                                           Visibility="{Binding IsBlockable, Converter={StaticResource BoolToVis}}"
                                                           ToolTip="While mapping is on, the original key/button does not reach other programs." />
+                                                <CheckBox Content="Full range" IsChecked="{Binding TriggerFullRange}"
+                                                          Visibility="{Binding CanUseFullRange, Converter={StaticResource BoolToVis}}"
+                                                          ToolTip="Use the whole axis travel for the trigger (pedals): fully released = 0%, fully pressed = 100%." />
                                             </StackPanel>
                                         </StackPanel>
                                         <Button Grid.Column="5" Content="✕" Padding="4,0" ToolTip="Delete binding" Click="DeleteBinding_Click" />

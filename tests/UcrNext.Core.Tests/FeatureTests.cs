@@ -141,6 +141,32 @@ public class CommandTests
         public void Quit() => Last = "quit";
         public IEnumerable<string> StatusLines() { yield return "Foreground app: x.exe"; }
         public IReadOnlyList<string> ActiveProfileNames => List.Where(p => p.Enabled).Select(p => p.Name).ToList();
+        public string ImportUcr(string path, bool perDevice) { Last = $"import {path} {perDevice}"; return "imported"; }
+    }
+
+    [Fact]
+    public void Game_command_enables_the_profiles_listing_that_game()
+    {
+        var h = new Host();
+        h.List[1].Games.Add("Daytona USA");
+        h.List[2].Games.Add("Daytona USA 2");
+        var c = new CommandProcessor(h);
+
+        Assert.StartsWith("Enabled for", c.Execute("game \"daytona usa\" --start"));   // exact wins over partial
+        Assert.Equal(new[] { false, true, false }, h.List.Select(p => p.Enabled));
+        Assert.True(h.IsMapping);
+        Assert.StartsWith("error:", c.Execute("game daytona"));      // ambiguous partial
+        c.Execute("game \"usa 2\"");
+        Assert.Equal(new[] { false, false, true }, h.List.Select(p => p.Enabled));
+        Assert.Contains("Daytona USA  →  Racing Wheel", c.Execute("games"));
+    }
+
+    [Fact]
+    public void Import_command_passes_path_and_flag()
+    {
+        var h = new Host(); var c = new CommandProcessor(h);
+        c.Execute("import \"C:\\UCR v0.9\\context.xml\" --per-device");
+        Assert.Equal("import C:\\UCR v0.9\\context.xml True", h.Last);
     }
 
     [Fact]

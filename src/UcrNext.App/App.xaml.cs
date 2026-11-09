@@ -130,6 +130,8 @@ public partial class App : Application, IControlHost
 
     public IEnumerable<string> StatusLines() => _services!.StatusLines();
 
+    public string ImportUcr(string path, bool perDevice) => _vm!.ImportUcr(path, perDevice).Report;
+
     protected override void OnExit(ExitEventArgs e)
     {
         _vm?.Flush();

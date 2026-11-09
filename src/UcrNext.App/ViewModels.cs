@@ -82,6 +82,7 @@ public sealed class BindingVm : Observable
         if (Model.Name is "" or "New binding") Model.Name = input.Label;
         if (!IsBlockable) Model.Block = false;
         Raise(nameof(InputText)); Raise(nameof(Name)); Raise(nameof(IsAnalogInput)); Raise(nameof(IsBlockable)); Raise(nameof(Block));
+        Raise(nameof(CanUseFullRange));
         _changed(this);
     }
 
@@ -95,7 +96,16 @@ public sealed class BindingVm : Observable
     public OutputOption? SelectedOutput
     {
         get => Model.Output is null ? null : Outputs.FirstOrDefault(o => o.Ref.Equals(Model.Output));
-        set { Model.Output = value?.Ref; Raise(); _changed(this); }
+        set { Model.Output = value?.Ref; Raise(); Raise(nameof(CanUseFullRange)); _changed(this); }
+    }
+
+    /// <summary>A stick/pedal axis driving a trigger can use its whole travel.</summary>
+    public bool CanUseFullRange => Model.Input?.Kind == InputKind.Axis && Model.Output?.IsTrigger == true;
+
+    public bool TriggerFullRange
+    {
+        get => Model.Settings.TriggerFullRange;
+        set { Model.Settings.TriggerFullRange = value; Raise(); _changed(this); }
     }
 
     public double Deadzone
@@ -131,10 +141,48 @@ public sealed class ProfileVm : Observable
     {
         Model = model; _changed = changed;
         foreach (var b in model.Bindings) Bindings.Add(new BindingVm(b, this, bv => _changed(this)));
+        foreach (var d in model.SkipIfDevicesPresent) SkipDevices.Add(d);
     }
 
     public Profile Model { get; }
     public ObservableCollection<BindingVm> Bindings { get; } = new();
+    public ObservableCollection<DeviceMatch> SkipDevices { get; } = new();
+
+    /// <summary>One game per line.</summary>
+    public string GamesText
+    {
+        get => string.Join(Environment.NewLine, Model.Games);
+        set
+        {
+            Model.Games = value.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            Raise(); Raise(nameof(GamesSummary));
+            _changed(this);
+        }
+    }
+
+    public string GamesSummary => Model.Games.Count switch
+    {
+        0 => "",
+        1 => Model.Games[0],
+        _ => $"{Model.Games.Count} games",
+    };
+
+    public void AddSkipDevice(DeviceInfo d)
+    {
+        if (Model.SkipIfDevicesPresent.Any(m => m.Matches(d))) return;
+        var m = new DeviceMatch { DeviceId = d.DeviceId, Name = d.Name };
+        Model.SkipIfDevicesPresent.Add(m);
+        SkipDevices.Add(m);
+        _changed(this);
+    }
+
+    public void RemoveSkipDevice(DeviceMatch m)
+    {
+        Model.SkipIfDevicesPresent.Remove(m);
+        SkipDevices.Remove(m);
+        _changed(this);
+    }
 
     public string Name
     {
@@ -306,6 +354,17 @@ public sealed class MainViewModel : Observable
         PushToEngine();
     }
 
+    /// <summary>Imports a UCR context.xml into the profile folder and reloads.</summary>
+    public UcrImportResult ImportUcr(string path, bool perDevice)
+    {
+        Flush();
+        var result = new UcrImporter(KeyMapping.ScanToVk, perDevice).ImportFile(path);
+        result.SaveTo(_s.Store);
+        LoadProfiles();
+        Status = $"Imported {result.Profiles.Count} UCR profile(s) — they start disabled; tick the ones you want";
+        return result;
+    }
+
     /// <summary>Re-reads every profile from disk (unsaved edits are saved first).</summary>
     public void Reload()
     {
@@ -362,7 +421,10 @@ public sealed class MainViewModel : Observable
             foreach (var d in now) Devices.Add(d);
         }
         var active = _s.Engine.ActiveProfileNames;
-        LiveText = $"Active profiles: {(active.Count == 0 ? "none" : string.Join(", ", active))}   ·   Foreground: {_s.Engine.ForegroundApp ?? "-"}";
+        var skipped = _s.Engine.SkippedProfileNames;
+        LiveText = $"Active profiles: {(active.Count == 0 ? "none" : string.Join(", ", active))}" +
+                   (skipped.Count == 0 ? "" : $"   ·   Skipped (device connected): {string.Join(", ", skipped)}") +
+                   $"   ·   Foreground: {_s.Engine.ForegroundApp ?? "-"}";
         Raise(nameof(PadStatus));
         Raise(nameof(DetailsText));
     }

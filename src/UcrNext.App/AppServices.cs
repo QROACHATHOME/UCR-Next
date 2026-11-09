@@ -65,6 +65,8 @@ public sealed class AppServices : IDisposable
     public IEnumerable<string> StatusLines()
     {
         yield return "Foreground app: " + (Engine.ForegroundApp ?? "(none)");
+        var skipped = Engine.SkippedProfileNames;
+        if (skipped.Count > 0) yield return "Skipped (device connected): " + string.Join(", ", skipped);
         yield return "Xbox 360 pad: " + Pad.Status;
         yield return VJoy.Status;
         yield return DirectInput?.Status ?? "DirectInput unavailable (using WinMM fallback)";

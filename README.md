@@ -5,7 +5,7 @@ It remaps any input (gamepad, joystick, wheel, keyboard, mouse) to any output (k
 a **virtual Xbox 360 controller** or **vJoy** joysticks), organised in profiles that are saved as JSON.
 It can run silently in the background, start with Windows, and be controlled from the command line.
 
-Status: **0.2**. Windows 10/11 only.
+Status: **0.3**. Windows 10/11 only.
 
 ## Features
 
@@ -23,6 +23,10 @@ Status: **0.2**. Windows 10/11 only.
   reaches other programs while mapping is on (any device via hooks, one device via Interception)
 - **Per-application profiles**: list programs (e.g. `game.exe`) on a profile and it is only active
   while one of them is in the foreground; profiles without programs are always active
+- **Skip while a device is connected**: e.g. a "pad as steering wheel" profile stays off — and creates
+  no virtual controller — while your real wheel is plugged in
+- **Games list per profile**, plus `ucrnext game "<name>"` to switch to the right profile from a launcher
+- **UCR import**: *File → Import UCR profiles* reads UCR's `context.xml` (see below)
 - **Background mode**: tray icon (optional), start hidden at Windows logon, optionally as administrator
 - **Command line**: `ucrnext.exe status | start | stop | enable <profile> | solo <profile> | …`
 - **Safety**: **Ctrl+Alt+Pause** always stops mapping and blocking; keys are never left stuck
@@ -91,6 +95,9 @@ ucrnext profiles               list profiles ([x] = enabled, apps they are limit
 ucrnext enable <profile>       enable a profile   (case-insensitive, unique prefix is enough,
 ucrnext disable <profile>      disable a profile   quote names with spaces)
 ucrnext solo <profile>         enable only this profile
+ucrnext games                  list games and the profiles they use
+ucrnext game <game> [--start]  enable only the profile(s) listing this game (exact, or unique partial name)
+ucrnext import <context.xml> [--per-device]   import UCR profiles (works even when UCR-Next is closed)
 ucrnext reload                 reload profiles from disk (after editing the JSON by hand)
 ucrnext show | hide            show or hide the window
 ucrnext quit                   exit UCR-Next
@@ -102,6 +109,40 @@ ucrnext autostart [status|off|logon|elevated]     start with Windows
 Exit code 0 = OK, 1 = error or UCR-Next not running, 2 = usage error. Handy for scripts,
 launchers (e.g. HyperSpin/RocketLauncher pre-launch commands) and Stream Deck buttons:
 `ucrnext solo "Racing Wheel" && ucrnext start`.
+
+## Profile settings: programs, games, devices
+
+Expand **Profile settings** above the bindings list:
+
+- **Only active while these programs are in front** — `game.exe, emulator.exe`; empty = everywhere.
+- **Games that use this profile** — one per line, free text. Shown in the profile list and used by
+  `ucrnext game "Daytona USA" --start`, which enables exactly the profile(s) listing that game.
+  Handy as a launcher pre-launch command (HyperSpin/RocketLauncher, LaunchBox, Playnite…).
+- **Skip this profile while connected** — *Add connected device* picks a plugged-in controller.
+  While any listed device is connected the profile is inactive and no virtual controller is created for
+  it. Devices are matched by id (`dinput:VID:PID#n`, so moving the wheel to another USB port is fine)
+  or by name. `ucrnext status` shows "Skipped (device connected)".
+
+## Importing UCR profiles
+
+UCR keeps everything in `context.xml` in the folder where `UCR.exe` is. Copy that file to this PC and
+use *File → Import UCR profiles…*, or `ucrnext import path\to\context.xml`.
+
+- Every UCR profile becomes a UCR-Next profile; child profiles are flattened into
+  "Parent › Child" with the parent's mappings (child mappings with the same name override them).
+- Imported profiles start **disabled** (UCR ran one profile at a time) — tick the ones you want,
+  or use `ucrnext solo <profile>` / `ucrnext game <game>`.
+- Re-importing the same file updates the bindings and keeps the games, programs, device rules and
+  enabled state you added in UCR-Next.
+- An import report lists everything that was approximated or skipped.
+
+| UCR | UCR-Next |
+|---|---|
+| Inputs: XInput, DirectInput (VID/PID + instance), Interception keyboard keys & mouse buttons | same devices; Interception inputs become "any keyboard/mouse" unless you choose per-device (needs Interception) |
+| Outputs: ViGEm Xbox 360, vJoy axes/buttons, Interception keyboard keys / mouse buttons / mouse movement | virtual Xbox 360 pad, vJoy, SendInput |
+| Plugins: Button to Button, Axis to Axis, Axes to Axes, Axis to Button, Button to Axis | converted with invert, deadzone, anti-deadzone, sensitivity, full-range triggers, pressed/released values |
+| Block flag on inputs | *Block* on keyboard/mouse bindings |
+| Not converted (reported) | other plugins (Button to Event, Axis Splitter/Merger, Buttons to Axis, Axis Initializer), filters, shadow devices, DS4 output, vJoy POV output, mouse wheel, non-linear sensitivity (approximated as linear), several ViGEm pads (merged into one) |
 
 ## Running in the background / with Windows
 

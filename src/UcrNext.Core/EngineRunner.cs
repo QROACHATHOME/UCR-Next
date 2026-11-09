@@ -43,12 +43,17 @@ public sealed class EngineRunner : IDisposable
     private void Loop()
     {
         var sw = Stopwatch.StartNew();
-        long next = 0;
+        long next = 0, nextDevices = 0;
         while (_running)
         {
             try
             {
                 _source.PollAll();
+                if (sw.ElapsedMilliseconds >= nextDevices)
+                {
+                    _engine.SetConnectedDevices(_source.Devices);
+                    nextDevices = sw.ElapsedMilliseconds + 500;
+                }
                 if (_mapping) _engine.Tick();
             }
             catch (Exception ex)

@@ -67,7 +67,31 @@ if (cmd == "autostart")
     return 0;
 }
 
-var reply = CommandPipe.Send(string.Join(" ", args.Select(CommandLine.Quote)));
+if (cmd == "import")
+{
+    // Send an absolute path (the app's working folder differs), or import offline if it isn't running.
+    var rest = args.Skip(1).ToList();
+    int pathIdx = rest.FindIndex(a => !a.StartsWith("--"));
+    if (pathIdx < 0) { Console.Error.WriteLine("usage: ucrnext import <path\\to\\context.xml> [--per-device]"); return 2; }
+    string full = Path.GetFullPath(rest[pathIdx]);
+    if (Directory.Exists(full)) full = Path.Combine(full, "context.xml");
+    if (!File.Exists(full)) { Console.Error.WriteLine($"error: file not found: {full}"); return 1; }
+    rest[pathIdx] = full;
+    args = new[] { "import" }.Concat(rest).ToArray();
+
+    if (CommandPipe.Send("status", 300) is null)
+    {
+        bool perDevice = rest.Contains("--per-device", StringComparer.OrdinalIgnoreCase);
+        var result = new UcrImporter(KeyMapping.ScanToVk, perDevice).ImportFile(full);
+        var store = new ProfileStore(ProfileStore.DefaultDirectory);
+        result.SaveTo(store);
+        Console.WriteLine(result.Report);
+        Console.WriteLine($"\nSaved {result.Profiles.Count} profile(s) to {store.Directory} (UCR-Next was not running). Imported profiles start disabled.");
+        return 0;
+    }
+}
+
+var reply = CommandPipe.Send(string.Join(" ", args.Select(CommandLine.Quote)), cmd == "import" ? 30000 : 2000);
 if (reply is null)
 {
     Console.Error.WriteLine("UCR-Next is not running. Start it with: ucrnext launch --background");

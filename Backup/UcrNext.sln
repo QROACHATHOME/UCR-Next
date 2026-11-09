@@ -1,0 +1,51 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "UcrNext.Core", "src\UcrNext.Core\UcrNext.Core.csproj", "{6A1F0C10-1111-4C11-9A11-000000000001}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "UcrNext.Devices", "src\UcrNext.Devices\UcrNext.Devices.csproj", "{6A1F0C10-1111-4C11-9A11-000000000002}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "UcrNext.App", "src\UcrNext.App\UcrNext.App.csproj", "{6A1F0C10-1111-4C11-9A11-000000000003}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "UcrNext.Core.Tests", "tests\UcrNext.Core.Tests\UcrNext.Core.Tests.csproj", "{6A1F0C10-1111-4C11-9A11-000000000004}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{C50D3908-D659-41DF-B5C5-C6DE88BCA2DD}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UcrNext.Cli", "src\UcrNext.Cli\UcrNext.Cli.csproj", "{B4935FE8-BDDB-456A-B265-4F82D0231ED2}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{6A1F0C10-1111-4C11-9A11-000000000001}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6A1F0C10-1111-4C11-9A11-000000000001}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6A1F0C10-1111-4C11-9A11-000000000001}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6A1F0C10-1111-4C11-9A11-000000000001}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6A1F0C10-1111-4C11-9A11-000000000002}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6A1F0C10-1111-4C11-9A11-000000000002}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6A1F0C10-1111-4C11-9A11-000000000002}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6A1F0C10-1111-4C11-9A11-000000000002}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6A1F0C10-1111-4C11-9A11-000000000003}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6A1F0C10-1111-4C11-9A11-000000000003}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6A1F0C10-1111-4C11-9A11-000000000003}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6A1F0C10-1111-4C11-9A11-000000000003}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6A1F0C10-1111-4C11-9A11-000000000004}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6A1F0C10-1111-4C11-9A11-000000000004}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6A1F0C10-1111-4C11-9A11-000000000004}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6A1F0C10-1111-4C11-9A11-000000000004}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B4935FE8-BDDB-456A-B265-4F82D0231ED2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B4935FE8-BDDB-456A-B265-4F82D0231ED2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B4935FE8-BDDB-456A-B265-4F82D0231ED2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B4935FE8-BDDB-456A-B265-4F82D0231ED2}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{B4935FE8-BDDB-456A-B265-4F82D0231ED2} = {C50D3908-D659-41DF-B5C5-C6DE88BCA2DD}
+	EndGlobalSection
+EndGlobal

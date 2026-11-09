@@ -113,6 +113,30 @@ public sealed class AxisSettings
     public bool Invert { get; set; }
     /// <summary>Value at or above which an analog input counts as a pressed button.</summary>
     public double ButtonThreshold { get; set; } = 0.5;
+    /// <summary>0..0.95: smallest output once the input leaves the deadzone (counters a game's own deadzone).</summary>
+    public double AntiDeadzone { get; set; }
+    /// <summary>Button → axis: axis value while the button is held (-1..1).</summary>
+    public double ButtonAxisPressed { get; set; } = 1.0;
+    /// <summary>Button → axis: axis value while the button is released (-1..1).</summary>
+    public double ButtonAxisReleased { get; set; }
+    /// <summary>
+    /// Axis → trigger: use the whole axis travel (-1 = released, +1 = fully pulled) instead of
+    /// only its positive half. Right for pedals and for sticks driving a trigger.
+    /// </summary>
+    public bool TriggerFullRange { get; set; }
+}
+
+/// <summary>Identifies a physical device for a profile rule (matches by id, or by name if the id differs).</summary>
+public sealed class DeviceMatch
+{
+    public string DeviceId { get; set; } = "";
+    public string Name { get; set; } = "";
+
+    public bool Matches(DeviceInfo d) =>
+        (!string.IsNullOrEmpty(DeviceId) && string.Equals(d.DeviceId, DeviceId, StringComparison.OrdinalIgnoreCase)) ||
+        (!string.IsNullOrEmpty(Name) && string.Equals(d.Name, Name, StringComparison.OrdinalIgnoreCase));
+
+    public override string ToString() => string.IsNullOrEmpty(Name) ? DeviceId : Name;
 }
 
 public sealed class Binding
@@ -140,7 +164,18 @@ public sealed class Profile
     /// these programs has the foreground window. Empty = active everywhere.
     /// </summary>
     public List<string> Applications { get; set; } = new();
+    /// <summary>
+    /// The profile is skipped while any of these devices is connected (e.g. skip the
+    /// "pad as wheel" profile when the real wheel is plugged in), so no virtual controller is created for it.
+    /// </summary>
+    public List<DeviceMatch> SkipIfDevicesPresent { get; set; } = new();
+    /// <summary>Free-form list of games that use this profile (shown in the UI, used by "ucrnext game").</summary>
+    public List<string> Games { get; set; } = new();
     public List<Binding> Bindings { get; set; } = new();
+
+    /// <summary>True if a skip rule matches one of the connected devices.</summary>
+    public static bool SkippedByDevices(IReadOnlyCollection<DeviceMatch> rules, IReadOnlyCollection<DeviceInfo> connected) =>
+        rules.Count > 0 && connected.Any(d => rules.Any(r => r.Matches(d)));
 
     /// <summary>True if the profile applies while <paramref name="foregroundExe"/> is in front.</summary>
     public static bool AppliesTo(IReadOnlyCollection<string> applications, string? foregroundExe)

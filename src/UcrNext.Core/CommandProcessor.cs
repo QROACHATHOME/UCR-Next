@@ -16,6 +16,8 @@ public interface IControlHost
     /// <summary>Extra status lines (foreground app, devices, drivers…).</summary>
     IEnumerable<string> StatusLines();
     IReadOnlyList<string> ActiveProfileNames { get; }
+    /// <summary>Imports a UCR context.xml and returns the report text.</summary>
+    string ImportUcr(string path, bool perDevice);
 }
 
 /// <summary>Parses text commands (from the CLI pipe) and applies them to an <see cref="IControlHost"/>.</summary>
@@ -29,6 +31,9 @@ public sealed class CommandProcessor
         "  enable <profile>       enable a profile\n" +
         "  disable <profile>      disable a profile\n" +
         "  solo <profile>         enable only this profile, disable all others\n" +
+        "  games                  list games and the profiles they use\n" +
+        "  game <game> [--start]  enable only the profile(s) listed for this game\n" +
+        "  import <context.xml> [--per-device]   import UCR profiles\n" +
         "  reload                 reload profiles from disk\n" +
         "  show | hide            show or hide the window\n" +
         "  quit                   exit UCR-Next\n" +
@@ -77,6 +82,25 @@ public sealed class CommandProcessor
                 foreach (var other in _host.Profiles) _host.SetProfileEnabled(other, ReferenceEquals(other, p));
                 return $"Only \"{p.Name}\" is enabled";
             }
+            case "games":
+                return ListGames();
+            case "game":
+            {
+                bool start = args.Skip(1).Any(a => a.Equals("--start", StringComparison.OrdinalIgnoreCase));
+                string game = string.Join(" ", args.Skip(1).Where(a => !a.Equals("--start", StringComparison.OrdinalIgnoreCase)));
+                var (matches, err) = FindGame(game);
+                if (matches is null) return err!;
+                foreach (var p in _host.Profiles) _host.SetProfileEnabled(p, matches.Contains(p));
+                if (start) _host.IsMapping = true;
+                return $"Enabled for \"{game}\": {string.Join(", ", matches.Select(p => p.Name))}" + (start ? " — mapping ON" : "");
+            }
+            case "import":
+            {
+                bool perDevice = args.Skip(1).Any(a => a.Equals("--per-device", StringComparison.OrdinalIgnoreCase));
+                string path = string.Join(" ", args.Skip(1).Where(a => !a.StartsWith("--")));
+                if (string.IsNullOrWhiteSpace(path)) return "error: path to UCR context.xml required";
+                return _host.ImportUcr(path, perDevice);
+            }
             case "reload":
                 _host.ReloadProfiles();
                 return $"Reloaded {_host.Profiles.Count} profile(s)";
@@ -113,9 +137,37 @@ public sealed class CommandProcessor
             sb.Append(p.Enabled ? "[x] " : "[ ] ").Append(p.Name)
               .Append($"  ({p.Bindings.Count} binding{(p.Bindings.Count == 1 ? "" : "s")})");
             if (p.Applications.Count > 0) sb.Append("  apps: ").Append(string.Join(", ", p.Applications));
+            if (p.SkipIfDevicesPresent.Count > 0) sb.Append("  skipped while connected: ").Append(string.Join(", ", p.SkipIfDevicesPresent));
+            if (p.Games.Count > 0) sb.Append("  games: ").Append(string.Join(", ", p.Games));
             sb.AppendLine();
         }
         return sb.ToString().TrimEnd();
+    }
+
+    private string ListGames()
+    {
+        var rows = _host.Profiles
+            .SelectMany(p => p.Games.Select(g => (Game: g, Profile: p.Name)))
+            .GroupBy(r => r.Game, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(g => g.Key, StringComparer.CurrentCultureIgnoreCase)
+            .Select(g => $"{g.Key}  →  {string.Join(", ", g.Select(r => r.Profile))}")
+            .ToList();
+        return rows.Count == 0 ? "(no games listed on any profile)" : string.Join("\n", rows);
+    }
+
+    /// <summary>Profiles listing the game: exact name first, else a unique partial match.</summary>
+    private (List<Profile>?, string?) FindGame(string game)
+    {
+        if (string.IsNullOrWhiteSpace(game)) return (null, "error: game name required");
+        var exact = _host.Profiles.Where(p => p.Games.Any(g => string.Equals(g, game, StringComparison.OrdinalIgnoreCase))).ToList();
+        if (exact.Count > 0) return (exact, null);
+        var names = _host.Profiles.SelectMany(p => p.Games)
+            .Where(g => g.Contains(game, StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (names.Count == 1)
+            return (_host.Profiles.Where(p => p.Games.Contains(names[0], StringComparer.OrdinalIgnoreCase)).ToList(), null);
+        if (names.Count == 0) return (null, $"error: no profile lists the game \"{game}\"");
+        return (null, $"error: \"{game}\" matches several games: " + string.Join(", ", names));
     }
 
     private (Profile?, string?) Find(string name)
