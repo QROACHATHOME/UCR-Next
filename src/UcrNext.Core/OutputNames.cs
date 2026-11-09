@@ -8,8 +8,8 @@ public static class OutputNames
         OutputTarget.Keyboard => "Key: " + VirtualKeys.Name(o.Index),
         OutputTarget.Mouse when o.Kind == OutputKind.Button => "Mouse button: " + (MouseButton)o.Index,
         OutputTarget.Mouse => "Mouse move: " + (MouseAxis)o.Index,
-        OutputTarget.Xbox360 when o.Kind == OutputKind.Button => "Xbox 360: " + (XboxButton)o.Index,
-        OutputTarget.Xbox360 => "Xbox 360: " + (XboxAxis)o.Index,
+        OutputTarget.Xbox360 when o.Kind == OutputKind.Button => $"Xbox 360 #{o.Device + 1}: {(XboxButton)o.Index}",
+        OutputTarget.Xbox360 => $"Xbox 360 #{o.Device + 1}: {(XboxAxis)o.Index}",
         OutputTarget.VJoy when o.Kind == OutputKind.Button => $"vJoy {o.Device}: Button {o.Index + 1}",
         OutputTarget.VJoy => $"vJoy {o.Device}: Axis {(VJoyAxis)o.Index}",
         _ => "?",
@@ -18,8 +18,11 @@ public static class OutputNames
     /// <summary>Every output the UI offers, virtual pads first.</summary>
     public static IEnumerable<OutputRef> All(IEnumerable<VJoyDeviceInfo>? vjoy = null)
     {
-        foreach (XboxAxis a in Enum.GetValues<XboxAxis>()) yield return OutputRef.Xbox(a);
-        foreach (XboxButton b in Enum.GetValues<XboxButton>()) yield return OutputRef.Xbox(b);
+        for (int pad = 0; pad < OutputRef.MaxXboxPads; pad++)
+        {
+            foreach (XboxAxis a in Enum.GetValues<XboxAxis>()) yield return OutputRef.Xbox(a, pad);
+            foreach (XboxButton b in Enum.GetValues<XboxButton>()) yield return OutputRef.Xbox(b, pad);
+        }
         foreach (var d in vjoy ?? Enumerable.Empty<VJoyDeviceInfo>())
         {
             foreach (var a in d.Axes) yield return OutputRef.VJoy(d.Id, a);

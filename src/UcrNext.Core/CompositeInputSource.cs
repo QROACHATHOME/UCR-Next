@@ -1,7 +1,7 @@
 namespace UcrNext.Core;
 
 /// <summary>Routes reads to whichever provider owns the device.</summary>
-public sealed class CompositeInputSource : IInputSource
+public sealed class CompositeInputSource : IInputSource, IDeltaSource
 {
     private readonly IReadOnlyList<IInputProvider> _providers;
 
@@ -14,6 +14,14 @@ public sealed class CompositeInputSource : IInputSource
         foreach (var p in _providers)
             if (p.TryRead(input, out value)) return true;
         value = 0;
+        return false;
+    }
+
+    public bool TryReadDelta(InputRef input, out double sum, out int events)
+    {
+        foreach (var p in _providers)
+            if (p is IDeltaSource d && d.TryReadDelta(input, out sum, out events)) return true;
+        sum = 0; events = 0;
         return false;
     }
 

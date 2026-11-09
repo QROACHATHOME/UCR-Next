@@ -10,6 +10,7 @@ public sealed class AppServices : IDisposable
     public string SettingsPath { get; }
     public ProfileStore Store { get; }
     public KeyboardMouseHookProvider Hooks { get; }
+    public RawMouseProvider RawMouse { get; }
     public ViGEmPadOutput Pad { get; }
     public VJoyOutput VJoy { get; }
     public DirectInputProvider? DirectInput { get; }
@@ -33,7 +34,7 @@ public sealed class AppServices : IDisposable
         MappingEngine? engine = null; // the hooks/Interception callbacks only run after it is set
         Hooks = new KeyboardMouseHookProvider(i => engine?.IsBlocked(i) == true, () => engine?.HasBlocks == true);
 
-        var providers = new List<IInputProvider> { new XInputProvider(() => Pad.UserIndex) };
+        var providers = new List<IInputProvider> { new XInputProvider(() => Pad.ExcludedSlots) };
         var di = new DirectInputProvider();
         if (di.IsAvailable) { DirectInput = di; providers.Add(di); }
         else providers.Add(new WinMmJoystickProvider()); // fallback
@@ -44,11 +45,14 @@ public sealed class AppServices : IDisposable
             Interception = icpt;
             if (icpt.Start()) providers.Add(icpt);
         }
+        RawMouse = new RawMouseProvider();
+        providers.Add(RawMouse); // before the hooks: owns mouse movement, wheel and per-device mouse buttons
         providers.Add(Hooks);
 
         Inputs = new CompositeInputSource(providers);
         Engine = engine = new MappingEngine(Inputs, new SendInputOutput(), Pad, VJoy);
         Hooks.Install();
+        RawMouse.Install();
 
         Foreground = new ForegroundWatcher();
         Foreground.Changed += fg => Engine.ForegroundApp = fg;
@@ -85,5 +89,6 @@ public sealed class AppServices : IDisposable
         Pad.Dispose();
         VJoy.Dispose();
         Hooks.Dispose();
+        RawMouse.Dispose();
     }
 }

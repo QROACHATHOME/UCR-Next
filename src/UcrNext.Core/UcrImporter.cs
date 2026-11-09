@@ -36,6 +36,7 @@ public sealed class UcrImporter
     };
     private static readonly XboxButton[] VigemPov = { XboxButton.DPadUp, XboxButton.DPadRight, XboxButton.DPadDown, XboxButton.DPadLeft };
     private static readonly string[] MouseNames = { "Left", "Right", "Middle", "X1", "X2" };
+    private static readonly string[] WheelNames = { "Wheel Up", "Wheel Down", "Wheel Right", "Wheel Left" };
 
     private const int DiButtonsOffset = 48; // SharpDX JoystickOffset.Buttons0
     private const int DiPovBase = 128;      // UCR-Next DirectInputProvider.PovBase
@@ -144,7 +145,7 @@ public sealed class UcrImporter
             if (!b.IsBound) { inputs.Add((null, false, false)); continue; }
             if (!scope.Inputs.TryGetValue(b.Config, out var dev))
             {
-                notes.Add($"\"{m.Title}\": input device configuration not found");
+                notes.Add($"\"{m.Title}\": an input refers to a device configuration that no longer exists in this UCR profile (it didn't work in UCR either)");
                 inputs.Add((null, false, false));
                 continue;
             }
@@ -166,6 +167,10 @@ public sealed class UcrImporter
             double D(string n, double def) =>
                 double.TryParse(plugin.Element(n)?.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) ? v : def;
 
+            string S(string n, string def) => plugin.Element(n)?.Value ?? def;
+            bool Flip(int i) => In(i).FlipY && In(i).Ref?.Kind == InputKind.Axis;
+
+            // Direct binding (one input → one output).
             void Add(string suffix, (InputRef? Ref, bool FlipY, bool Block) input, OutputRef? output, AxisSettings settings, bool invert)
             {
                 if (input.Ref is null || output is null) return;
@@ -181,17 +186,46 @@ public sealed class UcrImporter
                 });
             }
 
+            // Multi-input / stateful binding. Settings are used as given (flips already applied by the caller).
+            void AddMode(string suffix, BindingMode mode, int primary, int[] extras, OutputRef? output, AxisSettings settings)
+            {
+                var input = In(primary);
+                if (input.Ref is null || output is null) return;
+                profile.Bindings.Add(new Binding
+                {
+                    Name = m.Title + suffix,
+                    Mode = mode,
+                    Input = input.Ref,
+                    ExtraInputs = extras.Select(i => In(i).Ref).ToList(),
+                    Output = output,
+                    Settings = settings,
+                    Block = input.Block && IsBlockable(input.Ref),
+                });
+            }
+
             AxisSettings AxisSettingsFrom(string dz = "DeadZone", string sens = "Sensitivity")
             {
                 double sensitivity = D(sens, 100);
-                if (sensitivity != 100 && !P("Linear"))
-                    notes.Add($"\"{m.Title}\": UCR's non-linear sensitivity curve was approximated as linear");
                 return new AxisSettings
                 {
                     Deadzone = Math.Clamp(D(dz, 0) / 100, 0, 0.95),
                     AntiDeadzone = Math.Clamp(D("AntiDeadZone", 0) / 100, 0, 0.95),
                     Sensitivity = sensitivity <= 0 ? 1 : sensitivity / 100,
+                    // UCR only applies its curve when sensitivity isn't 100 %; Linear = plain multiplier.
+                    NonLinearSensitivity = sensitivity != 100 && !P("Linear"),
                 };
+            }
+
+            AxisSettings PairSettings(PairComponent c, double rotation = 0)
+            {
+                var s = AxisSettingsFrom();
+                s.AntiDeadzone = 0;
+                s.CircularDeadzone = P("CircularDz");
+                s.Component = c;
+                s.Invert = P("InvertX") ^ Flip(0);
+                s.InvertY = P("InvertY") ^ Flip(1);
+                s.RotationDegrees = rotation;
+                return s;
             }
 
             switch (type)
@@ -203,9 +237,16 @@ public sealed class UcrImporter
                     Add("", In(0), Out(0), AxisSettingsFrom(), P("Invert"));
                     break;
                 case "AxesToAxes":
-                    if (P("CircularDz")) notes.Add($"\"{m.Title}\": circular deadzone approximated per axis");
-                    Add(" (X)", In(0), Out(0), AxisSettingsFrom(), P("InvertX"));
-                    Add(" (Y)", In(1), Out(1), AxisSettingsFrom(), P("InvertY"));
+                    AddMode(" (X)", BindingMode.StickPair, 0, new[] { 1 }, Out(0), PairSettings(PairComponent.X));
+                    AddMode(" (Y)", BindingMode.StickPair, 0, new[] { 1 }, Out(1), PairSettings(PairComponent.Y));
+                    break;
+                case "AxesToAxesRotation":
+                    AddMode(" (X)", BindingMode.StickPair, 0, new[] { 1 }, Out(0), PairSettings(PairComponent.X, D("Rotation", 0)));
+                    AddMode(" (Y)", BindingMode.StickPair, 0, new[] { 1 }, Out(1), PairSettings(PairComponent.Y, D("Rotation", 0)));
+                    break;
+                case "AxesToAxesTrim":
+                    AddMode(" (X)", BindingMode.StickTrim, 0, new[] { 1, 2, 3 }, Out(0), PairSettings(PairComponent.X));
+                    AddMode(" (Y)", BindingMode.StickTrim, 0, new[] { 1, 2, 3 }, Out(1), PairSettings(PairComponent.Y));
                     break;
                 case "AxisToButton":
                 {
@@ -214,14 +255,87 @@ public sealed class UcrImporter
                     Add(" (low)", In(0), Out(1), new AxisSettings { ButtonThreshold = threshold }, !P("Invert"));
                     break;
                 }
+                case "AxesRangeToButton":
+                    AddMode("", BindingMode.AxesRange, 0, new[] { 1 }, Out(0), new AxisSettings
+                    {
+                        Invert = P("InvertX") ^ Flip(0),
+                        InvertY = P("InvertY") ^ Flip(1),
+                        XStart = D("XStart", -50) / 100, XEnd = D("XEnd", 50) / 100,
+                        YStart = D("YStart", -50) / 100, YEnd = D("YEnd", 50) / 100,
+                    });
+                    break;
                 case "ButtonToAxis":
-                    if (P("Initialize")) notes.Add($"\"{m.Title}\": 'Initialize axis' is implicit in UCR-Next");
                     Add("", In(0), Out(0), new AxisSettings
                     {
                         ButtonAxisReleased = Math.Clamp(D("Range", 0) / 100, -1, 1),
                         ButtonAxisPressed = Math.Clamp(D("RangePressed", 100) / 100, -1, 1),
                     }, false);
                     break;
+                case "ButtonsToAxis":
+                    // UCR: first input alone → axis max, second alone → axis min, both/none → centre.
+                    AddMode("", BindingMode.ButtonsToAxis, 0, new[] { 1 }, Out(0), new AxisSettings { Invert = P("Invert") });
+                    break;
+                case "AxisSplitter":
+                {
+                    // A flipped input (DirectInput Y) swaps which half is "high".
+                    bool f = Flip(0);
+                    var dz = Math.Clamp(D("DeadZone", 0) / 100, 0, 0.95);
+                    AddMode(" (high)", BindingMode.Direct, 0, Array.Empty<int>(), Out(0),
+                        new AxisSettings { Deadzone = dz, Half = f ? AxisHalf.Low : AxisHalf.High, Invert = P("InvertHigh") });
+                    AddMode(" (low)", BindingMode.Direct, 0, Array.Empty<int>(), Out(1),
+                        new AxisSettings { Deadzone = dz, Half = f ? AxisHalf.High : AxisHalf.Low, Invert = P("InvertLow") });
+                    break;
+                }
+                case "DeltaToAxis":
+                    AddMode("", BindingMode.DeltaToAxis, 0, new[] { 1 }, Out(0), new AxisSettings
+                    {
+                        DeltaMode = S("Mode", "Absolute") == "Relative" ? DeltaMode.Relative : DeltaMode.Absolute,
+                        DeltaSensitivity = D("Sensitivity", 100),
+                        DeltaDeadzone = (int)D("Deadzone", 0),
+                        TimeoutMs = (int)D("AbsoluteTimeout", 100),
+                    });
+                    break;
+                case "DeltaToButtons":
+                {
+                    AxisSettings Dir(int d) => new()
+                    {
+                        Direction = d,
+                        DeltaDeadzone = (int)Math.Abs(D("Min", 0)),
+                        TimeoutMs = (int)D("CenterTimeout", 100),
+                        DebounceMs = (int)D("DeBounceTimeout", 100),
+                    };
+                    AddMode(" (low)", BindingMode.DeltaToButtons, 0, Array.Empty<int>(), Out(0), Dir(-1));
+                    AddMode(" (high)", BindingMode.DeltaToButtons, 0, Array.Empty<int>(), Out(1), Dir(1));
+                    break;
+                }
+                case "ButtonToButtonsLongPress":
+                {
+                    AxisSettings Lp(PairComponent c) => new()
+                    {
+                        Component = c,
+                        LongPressMs = (int)D("Timeout", 200),
+                        ShortPressMs = (int)D("ShortPressDuration", 50),
+                    };
+                    AddMode(" (short)", BindingMode.LongPress, 0, Array.Empty<int>(), Out(0), Lp(PairComponent.X));
+                    AddMode(" (long)", BindingMode.LongPress, 0, Array.Empty<int>(), Out(1), Lp(PairComponent.Y));
+                    break;
+                }
+                case "AxisToAxisIncrement":
+                {
+                    if (!P("RelativeContinue") && plugin.Element("RelativeContinue") is not null)
+                        notes.Add($"\"{m.Title}\": 'Continue Mode' off is treated as on (the output keeps moving while the axis is held)");
+                    double sens = D("Sensitivity", 100);
+                    AddMode("", BindingMode.Increment, 0, Array.Empty<int>(), Out(0), new AxisSettings
+                    {
+                        Invert = P("Invert") ^ Flip(0),
+                        Deadzone = Math.Clamp(D("DeadZone", 0) / 100, 0, 0.95),
+                        Sensitivity = sens <= 0 ? 1 : sens / 100,
+                        NonLinearSensitivity = sens != 100 && !P("Linear"),
+                        IncrementRate = D("RelativeSensitivity", 2),
+                        CounterEffect = D("CounterEffect", 1.5),
+                    });
+                    break;
+                }
                 default:
                     notes.Add($"\"{m.Title}\": plugin \"{type}\" is not supported yet");
                     break;
@@ -233,7 +347,7 @@ public sealed class UcrImporter
     {
         if (!scope.Outputs.TryGetValue(b.Config, out var dev))
         {
-            notes.Add($"\"{mapping}\": output device configuration not found");
+            notes.Add($"\"{mapping}\": an output refers to a device configuration that no longer exists in this UCR profile (it didn't work in UCR either)");
             return null;
         }
         var r = ConvertOutput(dev, b, out string? why, out string? warn);
@@ -296,20 +410,34 @@ public sealed class UcrImporter
                 {
                     int sc = b.Value % 256 + 1;
                     bool e0 = b.Value >= 256;
-                    int vk = _scanToVk(sc | (e0 ? 0xE000 : 0));
-                    string keyName = vk != 0 ? VirtualKeys.Name(vk) : $"SC {sc:X2}";
+                    int vk = ScanToVk(sc, e0);
+                    string keyName = vk != 0 ? VirtualKeys.Name(vk) : $"SC {(e0 ? "E0 " : "")}{sc:X2}";
                     if (_perDeviceKeyboards)
                         return new InputRef($"ikbd:{hw}#{dev.Number + 1}", InputKind.Button, sc | (e0 ? 0x100 : 0), $"{dev.Title} Key {keyName}");
-                    if (vk == 0) { why = $"no virtual-key code for scan code {sc:X2}"; return null; }
+                    if (vk == 0) { why = $"no virtual-key code for scan code {(e0 ? "E0 " : "")}{sc:X2}"; return null; }
                     return new InputRef("keyboard", InputKind.Button, vk, $"Key {keyName}");
                 }
-                if (mouse && b.Type == 1 && b.Value is >= 0 and < 5)
+                if (mouse)
                 {
-                    return _perDeviceKeyboards
-                        ? new InputRef($"imouse:{hw}#{dev.Number + 1}", InputKind.Button, b.Value, $"{dev.Title} {MouseNames[b.Value]}")
-                        : new InputRef("mouse", InputKind.Button, b.Value, $"Mouse {MouseNames[b.Value]}");
+                    // Per-device mouse movement/wheel comes from Raw Input (no driver needed), buttons from Interception.
+                    string rawId = TryVidPid(hw, out int mv, out int mp) ? $"rawmouse:{mv:X4}:{mp:X4}#{dev.Number + 1}" : "mouse";
+                    string anyOrRaw = _perDeviceKeyboards ? rawId : "mouse";
+                    string who = _perDeviceKeyboards ? dev.Title : "Mouse";
+                    switch (b.Type)
+                    {
+                        case 1 when b.Value is >= 0 and < 5:
+                            return _perDeviceKeyboards
+                                ? new InputRef($"imouse:{hw}#{dev.Number + 1}", InputKind.Button, b.Value, $"{dev.Title} {MouseNames[b.Value]}")
+                                : new InputRef("mouse", InputKind.Button, b.Value, $"Mouse {MouseNames[b.Value]}");
+                        case 1 when b.Value is >= 5 and < 9: // Wheel Up, Down, Right, Left
+                            return new InputRef(anyOrRaw, InputKind.Button, b.Value, $"{who} {WheelNames[b.Value - 5]}");
+                        case 0 when b.Value is 0 or 1:      // movement X / Y
+                            return new InputRef(anyOrRaw, InputKind.Delta, b.Value, $"{who} movement {(b.Value == 0 ? "X" : "Y")}");
+                    }
+                    why = $"unsupported mouse binding (type {b.Type}, index {b.Value})";
+                    return null;
                 }
-                why = mouse ? "mouse wheel / movement inputs are not supported yet" : "unsupported keyboard binding";
+                why = $"unsupported keyboard binding (type {b.Type}, index {b.Value})";
                 return null;
             }
             default:
@@ -334,14 +462,21 @@ public sealed class UcrImporter
                     why = $"ViGEm \"{dev.Handle}\" (e.g. DualShock 4) output is not supported; only Xbox 360";
                     return null;
                 }
-                if (dev.Number > 0) warn = $"virtual Xbox 360 pad #{dev.Number + 1} was merged into the single UCR-Next pad";
+            {
+                int pad = dev.Number;
+                if (pad is < 0 or >= OutputRef.MaxXboxPads)
+                {
+                    warn = $"virtual Xbox 360 pad #{pad + 1} doesn't exist (max {OutputRef.MaxXboxPads}); used pad #{OutputRef.MaxXboxPads}";
+                    pad = Math.Clamp(pad, 0, OutputRef.MaxXboxPads - 1);
+                }
                 switch (b.Type)
                 {
-                    case 0 when b.Value is >= 0 and < 6: return OutputRef.Xbox((XboxAxis)b.Value);
-                    case 1 when b.Value is >= 0 and < 10: return OutputRef.Xbox(VigemButtons[b.Value]);
-                    case 2 when b.Value is >= 0 and < 4: return OutputRef.Xbox(VigemPov[b.Value]);
+                    case 0 when b.Value is >= 0 and < 6: return OutputRef.Xbox((XboxAxis)b.Value, pad);
+                    case 1 when b.Value is >= 0 and < 10: return OutputRef.Xbox(VigemButtons[b.Value], pad);
+                    case 2 when b.Value is >= 0 and < 4: return OutputRef.Xbox(VigemPov[b.Value], pad);
                 }
                 break;
+            }
             case "Core_vJoyInterfaceWrap":
             {
                 if (!int.TryParse(dev.Handle, out int h)) { why = $"unrecognised vJoy handle \"{dev.Handle}\""; return null; }
@@ -360,8 +495,9 @@ public sealed class UcrImporter
                 if (keyboard && b.Type == 1 && b.Value is >= 0 and < 512)
                 {
                     int sc = b.Value % 256 + 1;
-                    int vk = _scanToVk(sc | (b.Value >= 256 ? 0xE000 : 0));
-                    if (vk == 0) { why = $"no virtual-key code for scan code {sc:X2}"; return null; }
+                    bool e0 = b.Value >= 256;
+                    int vk = ScanToVk(sc, e0);
+                    if (vk == 0) { why = $"no virtual-key code for scan code {(e0 ? "E0 " : "")}{sc:X2}"; return null; }
                     return OutputRef.Key(vk);
                 }
                 if (!keyboard && b.Type == 1 && b.Value is >= 0 and < 5) return OutputRef.Mouse((MouseButton)b.Value);
@@ -389,6 +525,25 @@ public sealed class UcrImporter
         var t = (string?)plugin.Attribute(Xsi + "type") ?? plugin.Name.LocalName;
         int colon = t.LastIndexOf(':');
         return colon >= 0 ? t[(colon + 1)..] : t;
+    }
+
+    /// <summary>
+    /// Scan code → virtual key, with fallbacks for keys the layout doesn't map directly:
+    /// an extended code is retried without E0, and the numeric keypad has fixed codes.
+    /// </summary>
+    private int ScanToVk(int sc, bool e0)
+    {
+        int vk = _scanToVk(sc | (e0 ? 0xE000 : 0));
+        if (vk == 0 && e0) vk = _scanToVk(sc);
+        if (vk == 0 && !e0) vk = sc switch
+        {
+            0x37 => 0x6A, 0x4A => 0x6D, 0x4E => 0x6B, 0x53 => 0x6E,          // Numpad * - + .
+            0x47 => 0x67, 0x48 => 0x68, 0x49 => 0x69, 0x4B => 0x64, 0x4C => 0x65,
+            0x4D => 0x66, 0x4F => 0x61, 0x50 => 0x62, 0x51 => 0x63, 0x52 => 0x60, // Numpad 7 8 9 4 5 6 1 2 3 0
+            _ => 0,
+        };
+        if (vk == 0 && e0 && sc == 0x35) vk = 0x6F;                          // Numpad /
+        return vk;
     }
 
     private static bool IsBlockable(InputRef r) =>

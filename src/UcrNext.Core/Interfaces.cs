@@ -81,13 +81,23 @@ public interface IVJoyOutput
     void Release(int device);
 }
 
-/// <summary>Virtual gamepad output (ViGEm on Windows).</summary>
+/// <summary>Virtual Xbox 360 pads 0-3 (ViGEm on Windows).</summary>
 public interface IVirtualPadOutput
 {
     bool IsAvailable { get; }
     string Status { get; }
-    /// <summary>Plugs in the virtual pad if needed and sends the full state.</summary>
-    void Update(PadState state);
-    /// <summary>Unplugs the virtual pad.</summary>
-    void Disconnect();
+    /// <summary>Plugs in virtual pad <paramref name="pad"/> if needed and sends the full state.</summary>
+    void Update(int pad, PadState state);
+    /// <summary>Unplugs virtual pad <paramref name="pad"/>.</summary>
+    void Disconnect(int pad);
+}
+
+/// <summary>
+/// Relative-movement inputs (mouse, trackball, spinner). <paramref name="sum"/> is the movement
+/// since the previous engine tick and <paramref name="events"/> how many device reports made it up
+/// (UCR's delta plugins work per report, so the engine can average).
+/// </summary>
+public interface IDeltaSource
+{
+    bool TryReadDelta(InputRef input, out double sum, out int events);
 }

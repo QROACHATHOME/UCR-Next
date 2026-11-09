@@ -5,7 +5,7 @@ It remaps any input (gamepad, joystick, wheel, keyboard, mouse) to any output (k
 a **virtual Xbox 360 controller** or **vJoy** joysticks), organised in profiles that are saved as JSON.
 It can run silently in the background, start with Windows, and be controlled from the command line.
 
-Status: **0.3**. Windows 10/11 only.
+Status: **0.4**. Windows 10/11 only.
 
 ## Features
 
@@ -14,11 +14,26 @@ Status: **0.3**. Windows 10/11 only.
   - Other sticks, wheels, HOTAS, generic pads through **DirectInput**: up to 8 axes, 128 buttons,
     4 POV hats each (falls back to the WinMM joystick API if DirectInput is unavailable)
   - Keyboard and mouse buttons through low-level hooks ("any keyboard / any mouse")
+  - **Mouse / trackball / spinner movement and the mouse wheel** through Raw Input — no driver
+    needed, any mouse or one specific mouse (`rawmouse:VID:PID#n`)
   - **Per-device** keyboards and mice through the optional **Interception** driver
-- **Outputs**: keyboard and mouse (SendInput, scan codes), virtual **Xbox 360** pad (ViGEmBus),
-  **vJoy** devices 1–16 (all configured axes and buttons)
-- **Bindings**: any input → any output, with deadzone, sensitivity, invert;
-  analog → button past a threshold; button → full axis
+- **Outputs**: keyboard and mouse (SendInput, scan codes), up to **four virtual Xbox 360** pads
+  (P1–P4, ViGEmBus; plugged in in order so games number them correctly), **vJoy** devices 1–16
+- **Bindings**: any input → any output, with deadzone, anti-deadzone, sensitivity (linear or UCR's
+  curve), invert; analog → button past a threshold; button → axis with pressed/released values
+- **Binding modes** (*Mode* on the binding's second line, *Settings…* for all options):
+
+  | Mode | What it does | UCR plugin |
+  |---|---|---|
+  | Direct | one input → one output (optionally only the high/low half of an axis) | Button/Axis to Button/Axis, Axis Splitter |
+  | ButtonsToAxis | two buttons → one axis (+1 / -1 / centre) | Buttons to Axis |
+  | StickPair | two axes as one stick: circular deadzone, rotation | Axes to Axes, Axes to Axes (Rotation) |
+  | StickTrim | stick pair + trim button / reset trim | Axes to Axes (Trim) |
+  | AxesRange | button while both axes are inside a box | Axes Range to Button |
+  | DeltaToAxis | mouse/trackball movement → axis, absolute (returns to centre) or relative | Delta to Axis |
+  | DeltaToButtons | movement → button per direction, with centre timeout and debounce | Delta to Buttons |
+  | LongPress | short press and long press of one button → two outputs | Button to Buttons (Long Press) |
+  | Increment | axis moves the output gradually | Axis to Axis Increment |
 - **Blocking**: tick *Block* on a keyboard/mouse binding and the original key/button no longer
   reaches other programs while mapping is on (any device via hooks, one device via Interception)
 - **Per-application profiles**: list programs (e.g. `game.exe`) on a profile and it is only active
@@ -138,11 +153,11 @@ use *File → Import UCR profiles…*, or `ucrnext import path\to\context.xml`.
 
 | UCR | UCR-Next |
 |---|---|
-| Inputs: XInput, DirectInput (VID/PID + instance), Interception keyboard keys & mouse buttons | same devices; Interception inputs become "any keyboard/mouse" unless you choose per-device (needs Interception) |
-| Outputs: ViGEm Xbox 360, vJoy axes/buttons, Interception keyboard keys / mouse buttons / mouse movement | virtual Xbox 360 pad, vJoy, SendInput |
-| Plugins: Button to Button, Axis to Axis, Axes to Axes, Axis to Button, Button to Axis | converted with invert, deadzone, anti-deadzone, sensitivity, full-range triggers, pressed/released values |
+| Inputs: XInput, DirectInput (VID/PID + instance), Interception keyboard keys, mouse buttons, mouse movement and wheel | same devices; keyboard/mouse become "any keyboard/mouse" unless you choose per-device (keys need Interception; mouse movement/wheel per device works without it) |
+| Outputs: ViGEm Xbox 360 pads 1–4, vJoy axes/buttons, Interception keyboard keys / mouse buttons / mouse movement | virtual Xbox 360 pads P1–P4, vJoy, SendInput |
+| Plugins: Button to Button, Axis to Axis, Axes to Axes, Axis to Button, Button to Axis, Buttons to Axis, Axis Splitter, and HidWizards/UCR-Plugins: Axes to Axes (Rotation), Axes to Axes (Trim), Axes Range to Button, Axis to Axis Increment, Button to Buttons (Long Press), Delta to Axis, Delta to Buttons | converted to the binding modes above with the same maths as UCR (deadzones incl. circular, anti-deadzone, UCR's sensitivity curve, full-range triggers, timers) |
 | Block flag on inputs | *Block* on keyboard/mouse bindings |
-| Not converted (reported) | other plugins (Button to Event, Axis Splitter/Merger, Buttons to Axis, Axis Initializer), filters, shadow devices, DS4 output, vJoy POV output, mouse wheel, non-linear sensitivity (approximated as linear), several ViGEm pads (merged into one) |
+| Not converted (reported) | Button to Event, Axis Merger, Axis Initializer, Event to Button, Axis to Delta, FPV Angle Mix, Reversible Throttle, filters, shadow devices, DS4 output, vJoy POV output |
 
 ## Running in the background / with Windows
 
@@ -188,7 +203,6 @@ tests/UcrNext.Core.Tests  xUnit tests (engine, per-app, blocking, vJoy, commands
 ## Known limitations
 
 - Blocking applies to keyboard keys and mouse buttons, not to gamepads (that would need HidHide).
-- Mouse movement/wheel cannot be used as an input yet.
 - Third-party XInput pads may appear twice (XInput and DirectInput); bind the XInput one.
 - DirectInput reports only the axes a device exposes to DirectInput, which can be fewer than vJoy's
   own configuration shows.

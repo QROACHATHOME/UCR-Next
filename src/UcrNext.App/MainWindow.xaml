@@ -150,6 +150,7 @@
                         <ItemsControl.ItemTemplate>
                             <DataTemplate DataType="{x:Type local:BindingVm}">
                                 <Border BorderBrush="#FFDDDDDD" BorderThickness="0,0,0,1" Padding="4">
+                                  <StackPanel>
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="24" /><ColumnDefinition Width="2*" /><ColumnDefinition Width="3*" />
@@ -185,6 +186,31 @@
                                         </StackPanel>
                                         <Button Grid.Column="5" Content="✕" Padding="4,0" ToolTip="Delete binding" Click="DeleteBinding_Click" />
                                     </Grid>
+                                    <!-- Second line: mode, extra inputs, all settings -->
+                                    <WrapPanel Margin="26,2,0,0">
+                                        <TextBlock Text="Mode" VerticalAlignment="Center" Foreground="#FF666666" Margin="0,0,4,0" />
+                                        <ComboBox MinWidth="120" ItemsSource="{Binding Modes}" SelectedItem="{Binding Mode}" Margin="0,0,6,0" />
+                                        <ItemsControl ItemsSource="{Binding Extras}">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Orientation="Horizontal" Margin="0,0,8,0">
+                                                        <TextBlock VerticalAlignment="Center" Foreground="#FF666666">
+                                                            <Run Text="{Binding Name, Mode=OneWay}" /><Run Text=": " />
+                                                        </TextBlock>
+                                                        <TextBlock VerticalAlignment="Center" MaxWidth="180" TextTrimming="CharacterEllipsis"
+                                                                   Text="{Binding Text, Mode=OneWay}" ToolTip="{Binding Text, Mode=OneWay}" />
+                                                        <Button Content="Bind…" Click="BindExtra_Click" />
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                        <Button Content="Settings…" Click="BindingSettings_Click" ToolTip="All settings for this binding's mode" />
+                                        <TextBlock Text="{Binding ModeHint}" VerticalAlignment="Center" Foreground="#FF888888" FontSize="11" Margin="8,0,0,0" />
+                                    </WrapPanel>
+                                  </StackPanel>
                                 </Border>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>

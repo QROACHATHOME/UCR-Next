@@ -99,6 +99,59 @@ public sealed class BindingVm : Observable
         set { Model.Output = value?.Ref; Raise(); Raise(nameof(CanUseFullRange)); _changed(this); }
     }
 
+    // ---- Modes and extra inputs ----
+
+    public static IReadOnlyList<BindingMode> Modes { get; } = Enum.GetValues<BindingMode>();
+
+    public BindingMode Mode
+    {
+        get => Model.Mode;
+        set
+        {
+            if (Model.Mode == value) return;
+            Model.Mode = value;
+            int need = Binding.ExtraInputNames(value).Length;
+            while (Model.ExtraInputs.Count < need) Model.ExtraInputs.Add(null);
+            if (Model.ExtraInputs.Count > need) Model.ExtraInputs.RemoveRange(need, Model.ExtraInputs.Count - need);
+            Raise(); Raise(nameof(Extras)); Raise(nameof(ModeHint));
+            _changed(this);
+        }
+    }
+
+    public string ModeHint => Model.Mode switch
+    {
+        BindingMode.Direct => "",
+        BindingMode.ButtonsToAxis => "Input alone = +1, 2nd button alone = -1",
+        BindingMode.StickPair => "Two axes as one stick (circular deadzone, rotation); outputs the X or Y part",
+        BindingMode.StickTrim => "Stick with trim: hold Trim to add the current position, Reset clears it",
+        BindingMode.AxesRange => "Pressed while both axes are inside the box",
+        BindingMode.DeltaToAxis => "Mouse/trackball movement → axis (input: movement X or Y)",
+        BindingMode.DeltaToButtons => "Mouse/trackball movement → button for one direction",
+        BindingMode.LongPress => "Short press or long press of the input",
+        BindingMode.Increment => "Axis moves the output gradually",
+        _ => "",
+    };
+
+    public sealed record ExtraSlot(BindingVm Owner, int Index, string Name, string Text);
+
+    public IReadOnlyList<ExtraSlot> Extras => Binding.ExtraInputNames(Model.Mode)
+        .Select((name, i) => new ExtraSlot(this, i, name, Model.Extra(i)?.ToString() ?? "(not bound)")).ToList();
+
+    public void SetExtra(int index, InputRef? input)
+    {
+        while (Model.ExtraInputs.Count <= index) Model.ExtraInputs.Add(null);
+        Model.ExtraInputs[index] = input;
+        Raise(nameof(Extras));
+        _changed(this);
+    }
+
+    /// <summary>Call after the settings dialog changed Model.Settings directly.</summary>
+    public void SettingsEdited()
+    {
+        Raise(nameof(Deadzone)); Raise(nameof(Sensitivity)); Raise(nameof(Invert)); Raise(nameof(TriggerFullRange));
+        _changed(this);
+    }
+
     /// <summary>A stick/pedal axis driving a trigger can use its whole travel.</summary>
     public bool CanUseFullRange => Model.Input?.Kind == InputKind.Axis && Model.Output?.IsTrigger == true;
 

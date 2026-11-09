@@ -11,7 +11,45 @@ public enum InputKind
     Axis,
     /// <summary>Unipolar axis, value range 0..1 (triggers).</summary>
     Trigger,
+    /// <summary>Relative movement (mouse/trackball/spinner counts); index 0 = X, 1 = Y.</summary>
+    Delta,
 }
+
+/// <summary>How a binding turns its input(s) into its output. Direct = one input, one output.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum BindingMode
+{
+    /// <summary>Input → output with deadzone/sensitivity/invert (all the basic UCR plugins).</summary>
+    Direct,
+    /// <summary>Two buttons → one axis: Input alone = +1, ExtraInputs[0] alone = -1, both/none = 0.</summary>
+    ButtonsToAxis,
+    /// <summary>
+    /// Stick pair: Input = X axis, ExtraInputs[0] = Y axis; deadzone (optionally circular), sensitivity,
+    /// invert X/Y, rotation; outputs the X or Y component (Settings.Component).
+    /// </summary>
+    StickPair,
+    /// <summary>StickPair plus trim: ExtraInputs[1] = trim button (adds the current position), [2] = reset trim.</summary>
+    StickTrim,
+    /// <summary>Button pressed while both axes (Input, ExtraInputs[0]) are inside the configured box.</summary>
+    AxesRange,
+    /// <summary>Mouse/trackball delta → axis, absolute (decays after a timeout) or relative (accumulates). ExtraInputs[0] = optional reset button.</summary>
+    DeltaToAxis,
+    /// <summary>Mouse/trackball delta → button for one direction (Settings.Direction), with centre timeout and debounce.</summary>
+    DeltaToButtons,
+    /// <summary>One button → short-press or long-press output (Settings.Component = Short / Long).</summary>
+    LongPress,
+    /// <summary>Axis moves the output gradually ("incremental"), like UCR's Axis to Axis Increment.</summary>
+    Increment,
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum PairComponent { X, Y }
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum AxisHalf { Full, High, Low }
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum DeltaMode { Absolute, Relative }
 
 /// <summary>Identifies one control on one physical device, e.g. "xinput:0" button 12.</summary>
 public sealed class InputRef : IEquatable<InputRef>
@@ -74,8 +112,10 @@ public sealed class OutputRef : IEquatable<OutputRef>
     public OutputTarget Target { get; set; }
     public OutputKind Kind { get; set; }
     public int Index { get; set; }
-    /// <summary>vJoy device number (1-16). 0 for other targets.</summary>
+    /// <summary>vJoy device number (1-16), or virtual Xbox 360 pad number 0-3 (P1-P4). 0 for other targets.</summary>
     public int Device { get; set; }
+
+    public const int MaxXboxPads = 4;
 
     public OutputRef() { }
     public OutputRef(OutputTarget target, OutputKind kind, int index, int device = 0)
@@ -87,8 +127,8 @@ public sealed class OutputRef : IEquatable<OutputRef>
     public static OutputRef VJoyButton(int device, int buttonNumber) => new(OutputTarget.VJoy, OutputKind.Button, buttonNumber - 1, device);
 
     public static OutputRef Key(int vk) => new(OutputTarget.Keyboard, OutputKind.Button, vk);
-    public static OutputRef Xbox(XboxButton b) => new(OutputTarget.Xbox360, OutputKind.Button, (int)b);
-    public static OutputRef Xbox(XboxAxis a) => new(OutputTarget.Xbox360, OutputKind.Axis, (int)a);
+    public static OutputRef Xbox(XboxButton b, int pad = 0) => new(OutputTarget.Xbox360, OutputKind.Button, (int)b, pad);
+    public static OutputRef Xbox(XboxAxis a, int pad = 0) => new(OutputTarget.Xbox360, OutputKind.Axis, (int)a, pad);
     public static OutputRef Mouse(MouseButton b) => new(OutputTarget.Mouse, OutputKind.Button, (int)b);
     public static OutputRef Mouse(MouseAxis a) => new(OutputTarget.Mouse, OutputKind.Axis, (int)a);
 
@@ -124,6 +164,48 @@ public sealed class AxisSettings
     /// only its positive half. Right for pedals and for sticks driving a trigger.
     /// </summary>
     public bool TriggerFullRange { get; set; }
+
+    /// <summary>UCR's non-linear sensitivity curve (s·v + (1-s)·v³) instead of a plain multiplier.</summary>
+    public bool NonLinearSensitivity { get; set; }
+    /// <summary>Axis splitter: use only the positive (High) or negative (Low) half, stretched to the full range.</summary>
+    public AxisHalf Half { get; set; }
+
+    // ---- Multi-input / stateful modes (see BindingMode) ----
+
+    /// <summary>StickPair/StickTrim: which rotated component this binding outputs; LongPress: X = short, Y = long.</summary>
+    public PairComponent Component { get; set; }
+    /// <summary>StickPair/StickTrim/AxesRange: invert the Y (second) axis. (Invert applies to X.)</summary>
+    public bool InvertY { get; set; }
+    /// <summary>StickPair/StickTrim: radial deadzone instead of per-axis.</summary>
+    public bool CircularDeadzone { get; set; }
+    /// <summary>StickPair: rotate the stick by this many degrees (-360..360).</summary>
+    public double RotationDegrees { get; set; }
+    /// <summary>AxesRange: box limits, -1..1.</summary>
+    public double XStart { get; set; } = -0.5;
+    public double XEnd { get; set; } = 0.5;
+    public double YStart { get; set; } = -0.5;
+    public double YEnd { get; set; } = 0.5;
+    /// <summary>DeltaToAxis mode.</summary>
+    public DeltaMode DeltaMode { get; set; }
+    /// <summary>DeltaToAxis: multiplier (UCR "Sensitivity (multiplier)").</summary>
+    public double DeltaSensitivity { get; set; } = 1;
+    /// <summary>DeltaToAxis/DeltaToButtons: ignore movements smaller than this many counts.</summary>
+    public int DeltaDeadzone { get; set; }
+    /// <summary>DeltaToAxis (absolute): return to centre after this many ms without movement.
+    /// DeltaToButtons: release after this many ms without movement.</summary>
+    public int TimeoutMs { get; set; } = 100;
+    /// <summary>DeltaToButtons: direction this binding fires for (+1 high / -1 low).</summary>
+    public int Direction { get; set; } = 1;
+    /// <summary>DeltaToButtons: state changes are applied after this many ms.</summary>
+    public int DebounceMs { get; set; } = 100;
+    /// <summary>LongPress: hold time for the long press.</summary>
+    public int LongPressMs { get; set; } = 200;
+    /// <summary>LongPress: how long the short-press output is held.</summary>
+    public int ShortPressMs { get; set; } = 50;
+    /// <summary>Increment: output change per second at full input (UCR "Sensitivity %" ×100/s).</summary>
+    public double IncrementRate { get; set; } = 2;
+    /// <summary>Increment: multiplier when the input moves back toward centre against the output.</summary>
+    public double CounterEffect { get; set; } = 1.5;
 }
 
 /// <summary>Identifies a physical device for a profile rule (matches by id, or by name if the id differs).</summary>
@@ -144,9 +226,25 @@ public sealed class Binding
     public Guid Id { get; set; } = Guid.NewGuid();
     public string Name { get; set; } = "New binding";
     public bool Enabled { get; set; } = true;
+    public BindingMode Mode { get; set; }
     public InputRef? Input { get; set; }
+    /// <summary>Additional inputs some modes use (see <see cref="BindingMode"/>). Null entries = not bound.</summary>
+    public List<InputRef?> ExtraInputs { get; set; } = new();
     public OutputRef? Output { get; set; }
     public AxisSettings Settings { get; set; } = new();
+
+    public InputRef? Extra(int i) => i < ExtraInputs.Count ? ExtraInputs[i] : null;
+
+    /// <summary>Names of the extra inputs a mode uses.</summary>
+    public static string[] ExtraInputNames(BindingMode mode) => mode switch
+    {
+        BindingMode.ButtonsToAxis => new[] { "2nd button (pushes axis negative)" },
+        BindingMode.StickPair => new[] { "Y axis" },
+        BindingMode.StickTrim => new[] { "Y axis", "Trim button", "Reset trim button" },
+        BindingMode.AxesRange => new[] { "Axis 2" },
+        BindingMode.DeltaToAxis => new[] { "Reset button (optional)" },
+        _ => Array.Empty<string>(),
+    };
     /// <summary>
     /// Stop the physical input from reaching other programs while this binding is active.
     /// Works for keyboard keys and mouse buttons (all devices via hooks, or one device via Interception).

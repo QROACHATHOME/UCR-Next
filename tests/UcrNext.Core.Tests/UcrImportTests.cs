@@ -283,7 +283,9 @@ public class UcrImportTests
         Assert.Equal(OutputRef.Key(0x57), high.Output);      // scan 0x11 = W
         Assert.Equal(0.40, high.Settings.ButtonThreshold, 6);
         Assert.Contains(r.Notes, n => n.Contains("ButtonToEvent") && n.Contains("not supported"));
-        Assert.Contains(r.Notes, n => n.Contains("non-linear"));
+        var gas = r.Profiles[0].Bindings.Single(b => b.Name == "Gas");
+        Assert.True(gas.Settings.NonLinearSensitivity);    // UCR's curve is now reproduced exactly
+        Assert.Equal(0.8, gas.Settings.Sensitivity, 6);
     }
 
     [Fact]

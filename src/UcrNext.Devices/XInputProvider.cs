@@ -19,11 +19,12 @@ public sealed class XInputProvider : IInputProvider
     private readonly object _lock = new();
     private readonly XINPUT_GAMEPAD?[] _state = new XINPUT_GAMEPAD?[4];
     private readonly long[] _nextProbe = new long[4];
-    private readonly Func<int?> _excludedSlot;
+    private readonly Func<IReadOnlyCollection<int>> _excludedSlots;
     private IReadOnlyList<DeviceInfo> _devices = Array.Empty<DeviceInfo>();
 
-    /// <param name="excludedSlot">Slot of our own virtual pad, hidden to avoid feedback loops.</param>
-    public XInputProvider(Func<int?>? excludedSlot = null) => _excludedSlot = excludedSlot ?? (() => null);
+    /// <param name="excludedSlots">Slots of our own virtual pads, hidden to avoid feedback loops.</param>
+    public XInputProvider(Func<IReadOnlyCollection<int>>? excludedSlots = null) =>
+        _excludedSlots = excludedSlots ?? (() => Array.Empty<int>());
 
     public string Name => "XInput";
     public IReadOnlyList<DeviceInfo> Devices => _devices;
@@ -42,14 +43,14 @@ public sealed class XInputProvider : IInputProvider
     public void Poll()
     {
         long now = Environment.TickCount64;
-        int? excluded = _excludedSlot();
+        var excluded = _excludedSlots();
         bool changed = false;
         for (int i = 0; i < 4; i++)
         {
             XINPUT_GAMEPAD? s = null;
             bool wasConnected = _state[i] is not null;
             // Polling an empty slot is slow, so only probe empty slots once a second.
-            if (i != excluded && (wasConnected || now >= _nextProbe[i]))
+            if (!excluded.Contains(i) && (wasConnected || now >= _nextProbe[i]))
             {
                 if (XInputGetState((uint)i, out var st) == 0) s = st.Gamepad;
                 else _nextProbe[i] = now + 1000;

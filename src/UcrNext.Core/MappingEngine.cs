@@ -4,10 +4,12 @@ namespace UcrNext.Core;
 
 /// <summary>
 /// Evaluates all enabled bindings of all active profiles once per <see cref="Tick"/>.
-/// A profile is active when it is enabled and either lists no applications or lists the
-/// current <see cref="ForegroundApp"/>.
+/// A profile is active when it is enabled, applies to the current <see cref="ForegroundApp"/>,
+/// and none of its "skip while connected" devices is plugged in.
 /// The engine is state based: each tick it computes the complete desired output state and
 /// only sends the differences, so keys can never get stuck when a binding is removed.
+/// Bindings in timed modes (long press, delta timeouts, debounce, increment, trim) keep a small
+/// per-binding state that is reset whenever the profiles change.
 /// </summary>
 public sealed class MappingEngine
 {
@@ -16,9 +18,26 @@ public sealed class MappingEngine
 
     private sealed record CompiledProfile(string Name, string[] Apps, DeviceMatch[] Skip, Binding[] Bindings);
 
+    /// <summary>Runtime state for bindings whose output depends on time or history.</summary>
+    private sealed class BindingState
+    {
+        public double Out;
+        public double LastIn;
+        public long LastMoveMs = long.MinValue;
+        public bool Moved;
+        public int Target, Applied;
+        public long ChangeAtMs = long.MaxValue;
+        public bool WasPressed, LongHeld;
+        public long PressStartMs, ShortUntilMs = long.MinValue;
+        public double TrimX, TrimY;
+        public bool TrimTaken;
+        public long LastTickMs = long.MinValue;
+    }
+
     private static readonly HashSet<InputRef> NoBlocks = new();
 
     private readonly IInputSource _input;
+    private readonly IDeltaSource? _delta;
     private readonly IKeyboardMouseOutput _km;
     private readonly IVirtualPadOutput? _pad;
     private readonly IVJoyOutput? _vjoy;
@@ -33,28 +52,16 @@ public sealed class MappingEngine
     private string[] _skippedNames = Array.Empty<string>();
     private string _connectedKey = "";
 
-    /// <summary>Profiles that apply to the foreground app but are skipped because a listed device is connected.</summary>
-    public IReadOnlyList<string> SkippedProfileNames { get { lock (_gate) return _skippedNames; } }
-
-    /// <summary>Tells the engine which devices are plugged in (for "skip if device present" rules).</summary>
-    public void SetConnectedDevices(IEnumerable<DeviceInfo> devices)
-    {
-        var list = devices.ToList();
-        string key = string.Join("\n", list.Select(d => d.DeviceId + "\t" + d.Name));
-        if (key == _connectedKey) return;
-        _connectedKey = key;
-        _connected = list;
-    }
     private Binding[] _bindings = Array.Empty<Binding>();
+    private readonly Dictionary<Binding, BindingState> _states = new(ReferenceEqualityComparer.Instance);
     private string[] _activeNames = Array.Empty<string>();
     private volatile HashSet<InputRef> _blocked = NoBlocks;
     private HashSet<InputRef> _blockCandidates = NoBlocks;
 
     private readonly HashSet<int> _keysDown = new();
     private readonly HashSet<MouseButton> _mouseDown = new();
-    private readonly PadState _lastPad = new();
-    private bool _padUsed;
-    private bool _padSent;
+    private readonly Dictionary<int, PadState> _lastPads = new();
+    private int _padsNeeded; // pads 0.._padsNeeded-1 are plugged in (keeps P1..P4 numbering stable)
     private readonly Dictionary<int, VJoyState> _lastVJoy = new();
     private double _mouseRemX, _mouseRemY;
     private bool _active = true;
@@ -63,7 +70,11 @@ public sealed class MappingEngine
     public MappingEngine(IInputSource input, IKeyboardMouseOutput km, IVirtualPadOutput? pad, IVJoyOutput? vjoy = null)
     {
         _input = input; _km = km; _pad = pad; _vjoy = vjoy;
+        _delta = input as IDeltaSource;
     }
+
+    /// <summary>Milliseconds clock (replaceable in tests).</summary>
+    public Func<long> Clock { get; set; } = () => Environment.TickCount64;
 
     /// <summary>Executable name of the foreground program, e.g. "game.exe" (set by the host).</summary>
     public string? ForegroundApp
@@ -78,6 +89,9 @@ public sealed class MappingEngine
     /// <summary>Names of the profiles currently active (after the per-application filter).</summary>
     public IReadOnlyList<string> ActiveProfileNames { get { lock (_gate) return _activeNames; } }
 
+    /// <summary>Profiles that apply to the foreground app but are skipped because a listed device is connected.</summary>
+    public IReadOnlyList<string> SkippedProfileNames { get { lock (_gate) return _skippedNames; } }
+
     /// <summary>
     /// True if a physical input must not reach other programs right now. Thread-safe and
     /// lock-free: called from input hook callbacks.
@@ -86,6 +100,16 @@ public sealed class MappingEngine
 
     /// <summary>True if any active binding wants to block at all (cheap pre-check for hooks).</summary>
     public bool HasBlocks => _blocked.Count > 0;
+
+    /// <summary>Tells the engine which devices are plugged in (for "skip if device present" rules).</summary>
+    public void SetConnectedDevices(IEnumerable<DeviceInfo> devices)
+    {
+        var list = devices.ToList();
+        string key = string.Join("\n", list.Select(d => d.DeviceId + "\t" + d.Name));
+        if (key == _connectedKey) return;
+        _connectedKey = key;
+        _connected = list;
+    }
 
     /// <summary>Replaces the profiles with a deep copy of the enabled ones.</summary>
     public void SetProfiles(IEnumerable<Profile> profiles)
@@ -102,6 +126,7 @@ public sealed class MappingEngine
         {
             _profiles = copy;
             _profilesChanged = true;
+            _states.Clear();
             RefreshActive();
         }
     }
@@ -127,33 +152,18 @@ public sealed class MappingEngine
         {
             if (!_active) return;
             RefreshActive();
+            long now = Clock();
 
             var keys = new HashSet<int>();
             var mouse = new HashSet<MouseButton>();
-            var pad = new PadState();
+            var pads = new Dictionary<int, PadState>();
             var vjoy = new Dictionary<int, VJoyState>();
             double mx = 0, my = 0;
 
             foreach (var b in _bindings)
             {
-                if (!_input.TryRead(b.Input!, out double raw)) continue;
+                if (!Evaluate(b, now, out bool pressed, out double v)) continue;
                 var o = b.Output!;
-                var s = b.Settings;
-                double v;
-                bool pressed;
-                if (b.Input!.Kind == InputKind.Button)
-                {
-                    // Buttons: Invert means "active while released"; driving an axis uses the
-                    // configured pressed/released values.
-                    pressed = (raw >= 0.5) != s.Invert;
-                    v = pressed ? s.ButtonAxisPressed : s.ButtonAxisReleased;
-                }
-                else
-                {
-                    v = AxisProcessor.Shape(raw, s);
-                    pressed = v >= s.ButtonThreshold;
-                    if (o.IsTrigger && s.TriggerFullRange && b.Input.Kind == InputKind.Axis) v = (v + 1) / 2;
-                }
 
                 if (o.Kind == OutputKind.Button)
                 {
@@ -162,7 +172,7 @@ public sealed class MappingEngine
                     {
                         case OutputTarget.Keyboard: keys.Add(o.Index); break;
                         case OutputTarget.Mouse: mouse.Add((MouseButton)o.Index); break;
-                        case OutputTarget.Xbox360: pad.Buttons[o.Index] = true; break;
+                        case OutputTarget.Xbox360: PadFor(pads, o.Device).Buttons[o.Index] = true; break;
                         case OutputTarget.VJoy when o.Index is >= 0 and < VJoyState.MaxButtons:
                             VJoyFor(vjoy, o.Device).Buttons[o.Index] = true; break;
                     }
@@ -174,7 +184,8 @@ public sealed class MappingEngine
                     {
                         case OutputTarget.Xbox360:
                             // Several bindings on one axis: the strongest deflection wins.
-                            if (Math.Abs(v) > Math.Abs(pad.Axes[o.Index])) pad.Axes[o.Index] = v;
+                            var ps = PadFor(pads, o.Device);
+                            if (Math.Abs(v) > Math.Abs(ps.Axes[o.Index])) ps.Axes[o.Index] = v;
                             break;
                         case OutputTarget.VJoy:
                             var vs = VJoyFor(vjoy, o.Device);
@@ -188,10 +199,241 @@ public sealed class MappingEngine
 
             ApplyKeys(keys);
             ApplyMouse(mouse, mx, my);
-            ApplyPad(pad);
+            ApplyPads(pads);
             ApplyVJoy(vjoy);
         }
     }
+
+    // ------------------------------------------------------------------ evaluation
+
+    private double Read(InputRef? r) => r is not null && _input.TryRead(r, out var v) ? v : 0;
+    private bool Down(InputRef? r) => Read(r) >= 0.5;
+
+    private (double Sum, int Events) ReadDelta(InputRef r)
+    {
+        if (_delta is not null && _delta.TryReadDelta(r, out var sum, out var n)) return (sum, n);
+        double v = Read(r);
+        return (v, v != 0 ? 1 : 0);
+    }
+
+    private BindingState State(Binding b)
+    {
+        if (!_states.TryGetValue(b, out var s)) _states[b] = s = new BindingState();
+        return s;
+    }
+
+    /// <summary>Computes this tick's (pressed, value) for a binding. False = input not available.</summary>
+    private bool Evaluate(Binding b, long now, out bool pressed, out double v)
+    {
+        var s = b.Settings;
+        var input = b.Input!;
+        pressed = false;
+        v = 0;
+
+        switch (b.Mode)
+        {
+            case BindingMode.ButtonsToAxis:
+            {
+                bool hi = Down(input), lo = Down(b.Extra(0));
+                v = hi && !lo ? 1 : lo && !hi ? -1 : 0;
+                if (s.Invert) v = -v;
+                pressed = v >= s.ButtonThreshold;
+                return true;
+            }
+
+            case BindingMode.StickPair:
+            {
+                var (x, y) = ProcessPair(Read(input), Read(b.Extra(0)), s);
+                (x, y) = Rotate(x, y, s.RotationDegrees);
+                v = s.Component == PairComponent.X ? x : y;
+                pressed = v >= s.ButtonThreshold;
+                return true;
+            }
+
+            case BindingMode.StickTrim:
+            {
+                var st = State(b);
+                double rx = Read(input), ry = Read(b.Extra(0));
+                if (Down(b.Extra(2)))
+                {
+                    st.TrimX = st.TrimY = 0;          // reset trim; output holds
+                }
+                else if (Down(b.Extra(1)))
+                {
+                    if (!st.TrimTaken)
+                    {
+                        st.TrimX += rx; st.TrimY += ry; // add the current position as trim; output holds
+                        st.TrimTaken = true;
+                    }
+                }
+                else
+                {
+                    st.TrimTaken = false;
+                    var plain = new AxisSettings
+                    {
+                        Deadzone = s.Deadzone, CircularDeadzone = s.CircularDeadzone,
+                        Sensitivity = s.Sensitivity, NonLinearSensitivity = s.NonLinearSensitivity,
+                    };
+                    var (x, y) = ProcessPair(rx, ry, plain);
+                    x = Math.Clamp(x + st.TrimX, -1, 1);
+                    y = Math.Clamp(y + st.TrimY, -1, 1);
+                    if (s.Invert) x = -x;
+                    if (s.InvertY) y = -y;
+                    st.Out = s.Component == PairComponent.X ? x : y;
+                }
+                v = st.Out;
+                pressed = v >= s.ButtonThreshold;
+                return true;
+            }
+
+            case BindingMode.AxesRange:
+            {
+                double x = Read(input), y = Read(b.Extra(0));
+                if (s.Invert) x = -x;
+                if (s.InvertY) y = -y;
+                pressed = x >= s.XStart && x <= s.XEnd && y >= s.YStart && y <= s.YEnd;
+                v = pressed ? 1 : 0;
+                return true;
+            }
+
+            case BindingMode.DeltaToAxis:
+            {
+                var st = State(b);
+                var (sum, n) = ReadDelta(input);
+                double avg = n > 0 ? sum / n : 0;
+                if (s.DeltaMode == DeltaMode.Relative)
+                {
+                    if (Down(b.Extra(0))) st.Out = 0;
+                    else if (n > 0 && Math.Abs(avg) >= s.DeltaDeadzone)
+                        st.Out = Math.Clamp(st.Out + sum * s.DeltaSensitivity / 32768.0, -1, 1);
+                }
+                else
+                {
+                    if (n > 0 && Math.Abs(avg) >= s.DeltaDeadzone)
+                    {
+                        st.Out = Math.Clamp(avg * 100 * s.DeltaSensitivity / 32768.0, -1, 1);
+                        st.LastMoveMs = now;
+                    }
+                    else if (now - st.LastMoveMs > s.TimeoutMs) st.Out = 0;
+                }
+                v = s.Invert ? -st.Out : st.Out;
+                pressed = v >= s.ButtonThreshold;
+                return true;
+            }
+
+            case BindingMode.DeltaToButtons:
+            {
+                var st = State(b);
+                var (sum, n) = ReadDelta(input);
+                double avg = n > 0 ? sum / n : 0;
+                if (n > 0 && avg != 0 && Math.Abs(avg) >= s.DeltaDeadzone)
+                {
+                    st.LastMoveMs = now; st.Moved = true;
+                    SetTarget(st, Math.Sign(avg), now, s.DebounceMs);
+                }
+                else if (st.Moved && now - st.LastMoveMs > s.TimeoutMs)
+                {
+                    st.Moved = false;
+                    SetTarget(st, 0, now, s.DebounceMs);
+                }
+                if (now >= st.ChangeAtMs) { st.Applied = st.Target; st.ChangeAtMs = long.MaxValue; }
+                pressed = st.Applied != 0 && st.Applied == Math.Sign(s.Direction);
+                v = pressed ? 1 : 0;
+                return true;
+            }
+
+            case BindingMode.LongPress:
+            {
+                var st = State(b);
+                bool down = Down(input);
+                if (down && !st.WasPressed) { st.PressStartMs = now; st.LongHeld = false; }
+                if (down && !st.LongHeld && now - st.PressStartMs >= s.LongPressMs) st.LongHeld = true;
+                if (!down && st.WasPressed)
+                {
+                    if (st.LongHeld) st.LongHeld = false;
+                    else st.ShortUntilMs = now + s.ShortPressMs;
+                }
+                st.WasPressed = down;
+                pressed = s.Component == PairComponent.X ? now < st.ShortUntilMs : st.LongHeld && down;
+                v = pressed ? 1 : 0;
+                return true;
+            }
+
+            case BindingMode.Increment:
+            {
+                var st = State(b);
+                double inV = Read(input);
+                if (s.Invert) inV = -inV;
+                inV = AxisProcessor.Deadzone(inV, s.Deadzone);
+                inV = Math.Clamp(AxisProcessor.ApplySensitivity(inV, s), -1, 1);
+                double dtTicks = st.LastTickMs == long.MinValue ? 0 : (now - st.LastTickMs) / 10.0; // UCR steps every 10 ms
+                st.LastTickMs = now;
+                if (Math.Sign(inV) != Math.Sign(st.Out) && Math.Abs(inV) < Math.Abs(st.LastIn))
+                    inV *= Math.Truncate(s.CounterEffect); // UCR casts the counter effect to an integer
+                st.Out = Math.Clamp(st.Out + inV * (s.IncrementRate / 100.0) * dtTicks, -1, 1);
+                st.LastIn = inV;
+                v = st.Out;
+                pressed = v >= s.ButtonThreshold;
+                return true;
+            }
+
+            default: // Direct
+            {
+                if (!_input.TryRead(input, out double raw)) return false;
+                if (input.Kind == InputKind.Button)
+                {
+                    // Buttons: Invert means "active while released"; driving an axis uses the
+                    // configured pressed/released values.
+                    pressed = (raw >= 0.5) != s.Invert;
+                    v = pressed ? s.ButtonAxisPressed : s.ButtonAxisReleased;
+                }
+                else if (s.Half != AxisHalf.Full)
+                {
+                    v = AxisProcessor.Split(AxisProcessor.Deadzone(raw, s.Deadzone), s.Half);
+                    if (s.Invert) v = -v;
+                    pressed = v >= s.ButtonThreshold;
+                }
+                else
+                {
+                    v = AxisProcessor.Shape(raw, s);
+                    pressed = v >= s.ButtonThreshold;
+                    if (b.Output!.IsTrigger && s.TriggerFullRange && input.Kind == InputKind.Axis) v = (v + 1) / 2;
+                }
+                return true;
+            }
+        }
+    }
+
+    private static void SetTarget(BindingState st, int target, long now, int debounceMs)
+    {
+        if (target == st.Target) return;
+        st.Target = target;
+        st.ChangeAtMs = now + Math.Max(0, debounceMs);
+    }
+
+    /// <summary>Deadzone (per axis or circular) + sensitivity + invert for a stick pair.</summary>
+    private static (double X, double Y) ProcessPair(double x, double y, AxisSettings s)
+    {
+        if (s.Deadzone > 0)
+        {
+            if (s.CircularDeadzone) (x, y) = AxisProcessor.CircularDeadzone(x, y, s.Deadzone);
+            else { x = AxisProcessor.Deadzone(x, s.Deadzone); y = AxisProcessor.Deadzone(y, s.Deadzone); }
+        }
+        x = Math.Clamp(AxisProcessor.ApplySensitivity(x, s), -1, 1);
+        y = Math.Clamp(AxisProcessor.ApplySensitivity(y, s), -1, 1);
+        if (s.Invert) x = -x;
+        if (s.InvertY) y = -y;
+        return (x, y);
+    }
+
+    private static (double X, double Y) Rotate(double x, double y, double degrees)
+    {
+        if (degrees == 0) return (x, y);
+        double r = degrees * Math.PI / 180, c = Math.Cos(r), sn = Math.Sin(r);
+        return (Math.Clamp(c * x - sn * y, -1, 1), Math.Clamp(sn * x + c * y, -1, 1));
+    }
+
+    // ------------------------------------------------------------------ outputs
 
     /// <summary>Releases every held key/button and centres / unplugs the virtual devices.</summary>
     public void ReleaseAll()
@@ -200,21 +442,22 @@ public sealed class MappingEngine
         {
             ApplyKeys(new HashSet<int>());
             ApplyMouse(new HashSet<MouseButton>(), 0, 0);
-            if (_padSent && _pad is not null)
-            {
-                _pad.Update(new PadState());
-                _pad.Disconnect();
-            }
-            _lastPad.CopyFrom(new PadState());
-            _padSent = false;
+            if (_pad is not null)
+                foreach (var pad in _lastPads.Keys.OrderByDescending(p => p))
+                {
+                    _pad.Update(pad, new PadState());
+                    _pad.Disconnect(pad);
+                }
+            _lastPads.Clear();
             foreach (var id in _lastVJoy.Keys) _vjoy?.Release(id);
             _lastVJoy.Clear();
             _mouseRemX = _mouseRemY = 0;
+            _states.Clear();
             _blocked = NoBlocks;
         }
     }
 
-    /// <summary>Recomputes which profiles apply to the current foreground app (cheap when nothing changed).</summary>
+    /// <summary>Recomputes which profiles apply right now (cheap when nothing changed).</summary>
     private void RefreshActive()
     {
         string? fg = _foreground;
@@ -234,7 +477,9 @@ public sealed class MappingEngine
         _bindings = active.SelectMany(p => p.Bindings).ToArray();
         _activeNames = active.Select(p => p.Name).ToArray();
         _skippedNames = skipped.Select(i => _profiles[i].Name).ToArray();
-        _padUsed = _bindings.Any(b => b.Output!.Target == OutputTarget.Xbox360);
+        var padIndexes = _bindings.Where(b => b.Output!.Target == OutputTarget.Xbox360)
+            .Select(b => Math.Clamp(b.Output!.Device, 0, OutputRef.MaxXboxPads - 1)).ToList();
+        _padsNeeded = padIndexes.Count == 0 ? 0 : padIndexes.Max() + 1;
         var blocks = _bindings.Where(b => b.Block).Select(b => b.Input!).ToHashSet();
         _blockCandidates = blocks.Count == 0 ? NoBlocks : blocks;
         _blocked = _active ? _blockCandidates : NoBlocks;
@@ -243,6 +488,13 @@ public sealed class MappingEngine
     private static VJoyState VJoyFor(Dictionary<int, VJoyState> map, int device)
     {
         if (!map.TryGetValue(device, out var s)) map[device] = s = new VJoyState();
+        return s;
+    }
+
+    private static PadState PadFor(Dictionary<int, PadState> map, int pad)
+    {
+        pad = Math.Clamp(pad, 0, OutputRef.MaxXboxPads - 1);
+        if (!map.TryGetValue(pad, out var s)) map[pad] = s = new PadState();
         return s;
     }
 
@@ -266,18 +518,28 @@ public sealed class MappingEngine
         if (dx != 0 || dy != 0) _km.MouseMove(dx, dy);
     }
 
-    private void ApplyPad(PadState pad)
+    /// <summary>
+    /// Plugs in pads 0..N-1 in order (so a game always sees P1 before P2), sends changed states,
+    /// and unplugs pads no longer needed (highest first).
+    /// </summary>
+    private void ApplyPads(Dictionary<int, PadState> want)
     {
         if (_pad is null) return;
-        if (!_padUsed)
+        foreach (var pad in _lastPads.Keys.Where(p => p >= _padsNeeded).OrderByDescending(p => p).ToList())
         {
-            if (_padSent) { _pad.Update(new PadState()); _pad.Disconnect(); _padSent = false; _lastPad.CopyFrom(new PadState()); }
-            return;
+            _pad.Update(pad, new PadState());
+            _pad.Disconnect(pad);
+            _lastPads.Remove(pad);
         }
-        if (_padSent && pad.Equals(_lastPad)) return;
-        _pad.Update(pad);
-        _lastPad.CopyFrom(pad);
-        _padSent = true;
+        for (int pad = 0; pad < _padsNeeded; pad++)
+        {
+            var state = want.TryGetValue(pad, out var s) ? s : new PadState();
+            if (_lastPads.TryGetValue(pad, out var last) && last.Equals(state)) continue;
+            _pad.Update(pad, state);
+            var copy = new PadState();
+            copy.CopyFrom(state);
+            _lastPads[pad] = copy;
+        }
     }
 
     private void ApplyVJoy(Dictionary<int, VJoyState> want)

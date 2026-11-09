@@ -21,6 +21,7 @@ public partial class BindDialog : Window
     private readonly Dictionary<InputRef, double> _baseline = new();
     private readonly DispatcherTimer _timer;
     private readonly DateTime _started = DateTime.Now;
+    private readonly bool _interception;
 
     public InputRef? Captured { get; private set; }
 
@@ -28,7 +29,8 @@ public partial class BindDialog : Window
     {
         InitializeComponent();
         _inputs = inputs;
-        AnyDeviceBox.Visibility = interceptionRunning ? Visibility.Visible : Visibility.Collapsed;
+        // Per-device mice work through Raw Input even without Interception, so always offer the choice.
+        _interception = interceptionRunning;
         foreach (var (input, value) in inputs.ReadAll()) _baseline[input] = value;
         _timer = new DispatcherTimer(TimeSpan.FromMilliseconds(15), DispatcherPriority.Input, (_, _) => Check(), Dispatcher);
         Closed += (_, _) => _timer.Stop();
@@ -39,10 +41,22 @@ public partial class BindDialog : Window
         var left = Timeout - (DateTime.Now - _started);
         if (left <= TimeSpan.Zero) { DialogResult = false; return; }
         CountdownText.Text = $"Waiting… {left.Seconds + 1}s";
-        bool anyDevice = AnyDeviceBox.Visibility != Visibility.Visible || AnyDeviceBox.IsChecked == true;
+        bool anyDevice = AnyDeviceBox.IsChecked == true;
+        bool movement = MovementBox.IsChecked == true;
 
         foreach (var (input, value) in _inputs.ReadAll())
         {
+            if (input.Kind == InputKind.Delta)
+            {
+                // Movement values are "since the last read", so no baseline comparison.
+                if (!movement || Math.Abs(value) < 1.0) continue;
+                bool perDevice = input.DeviceId.StartsWith(RawMouseProvider.Prefix);
+                if (perDevice == anyDevice) continue;
+                Captured = input;
+                DialogResult = true;
+                return;
+            }
+
             double before = _baseline.TryGetValue(input, out var b) ? b : 0;
             bool hit = input.Kind switch
             {
@@ -54,12 +68,16 @@ public partial class BindDialog : Window
 
             string id = input.DeviceId;
             bool hookKb = id == KeyboardMouseHookProvider.KeyboardId, hookMouse = id == KeyboardMouseHookProvider.MouseId;
-            bool icptKb = id.StartsWith(InterceptionProvider.KeyboardPrefix), icptMouse = id.StartsWith(InterceptionProvider.MousePrefix);
+            bool icptKb = id.StartsWith(InterceptionProvider.KeyboardPrefix);
+            bool icptMouse = id.StartsWith(InterceptionProvider.MousePrefix) || id.StartsWith(RawMouseProvider.Prefix);
+            // Wheel "buttons" (5-8) only exist on the raw provider, for any mouse as well as per device.
+            if (hookMouse && input.Index >= 5) { Captured = input; DialogResult = true; return; }
 
             if ((hookKb && input.Index == VK_ESCAPE) || (icptKb && input.Index == SC_ESCAPE)) { DialogResult = false; return; }
             if ((hookMouse || icptMouse) && input.Index == (int)MouseButton.Left) continue;
             if (anyDevice && (icptKb || icptMouse)) continue;   // take the "any keyboard/mouse" version
-            if (!anyDevice && (hookKb || hookMouse)) continue;  // take the per-device version
+            // Per-device: skip the "any" version when a per-device one exists (keyboards need Interception).
+            if (!anyDevice && (hookMouse || (hookKb && _interception))) continue;
 
             Captured = input;
             DialogResult = true;
