@@ -14,7 +14,7 @@
                        Text="Esc cancels. The left mouse button is ignored here so you can click Cancel." />
             <CheckBox x:Name="AnyDeviceBox" Margin="0,10,0,0" IsChecked="True"
                       Content="Keyboard/mouse: accept it from any keyboard or mouse"
-                      ToolTip="Untick to bind to the one keyboard or mouse you use (per-device keyboards need the Interception driver)." />
+                      ToolTip="Untick to bind to the one keyboard or mouse you use. Works without drivers (Raw Input, can't block the original key); with Interception on it can also block." />
             <CheckBox x:Name="MovementBox" Margin="0,6,0,0" IsChecked="False"
                       Content="Capture mouse / trackball movement (move it firmly in one direction)"
                       ToolTip="Off by default so moving the mouse to click Cancel doesn't bind it." />

@@ -1,4 +1,4 @@
-using UcrNext.Core;
+﻿using UcrNext.Core;
 using UcrNext.Devices;
 
 namespace UcrNext.App;
@@ -10,7 +10,7 @@ public sealed class AppServices : IDisposable
     public string SettingsPath { get; }
     public ProfileStore Store { get; }
     public KeyboardMouseHookProvider Hooks { get; }
-    public RawMouseProvider RawMouse { get; }
+    public RawInputProvider RawInput { get; }
     public ViGEmPadOutput Pad { get; }
     public VJoyOutput VJoy { get; }
     public DirectInputProvider? DirectInput { get; }
@@ -45,14 +45,14 @@ public sealed class AppServices : IDisposable
             Interception = icpt;
             if (icpt.Start()) providers.Add(icpt);
         }
-        RawMouse = new RawMouseProvider();
-        providers.Add(RawMouse); // before the hooks: owns mouse movement, wheel and per-device mouse buttons
+        RawInput = new RawInputProvider();
+        providers.Add(RawInput); // before the hooks: owns mouse movement, wheel and per-device mouse buttons
         providers.Add(Hooks);
 
         Inputs = new CompositeInputSource(providers);
         Engine = engine = new MappingEngine(Inputs, new SendInputOutput(), Pad, VJoy);
         Hooks.Install();
-        RawMouse.Install();
+        RawInput.Install();
 
         Foreground = new ForegroundWatcher();
         Foreground.Changed += fg => Engine.ForegroundApp = fg;
@@ -89,6 +89,6 @@ public sealed class AppServices : IDisposable
         Pad.Dispose();
         VJoy.Dispose();
         Hooks.Dispose();
-        RawMouse.Dispose();
+        RawInput.Dispose();
     }
 }

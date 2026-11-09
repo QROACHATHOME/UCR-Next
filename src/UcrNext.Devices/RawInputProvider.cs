@@ -5,41 +5,51 @@ using UcrNext.Core;
 namespace UcrNext.Devices;
 
 /// <summary>
-/// Mouse / trackball / spinner movement and wheel through Windows Raw Input (no driver needed).
+/// Per-device keyboards and mice through Windows Raw Input — no driver needed, but read-only
+/// (Raw Input cannot stop the original key/click from reaching other programs; use Interception for that).
+///
+/// Mice ("rawmouse:VID:PID#n", or "mouse" = any mouse):
 ///  - Delta inputs: index 0 = X, 1 = Y (counts since the last engine tick).
 ///  - Buttons: 0-4 = Left, Right, Middle, X1, X2 (per device only — "any mouse" buttons come from the
 ///    hooks, which can also block); 5-8 = Wheel Up, Wheel Down, Wheel Right, Wheel Left (short pulses).
-/// Device ids: "mouse" = any mouse, "rawmouse:046D:C52B#1" = one specific mouse (VID:PID#instance).
-/// Injected input (hDevice = 0, e.g. our own SendInput) is ignored.
+/// Keyboards ("rawkbd:VID:PID#n"):
+///  - Buttons indexed by scan code | 0x100 for E0 keys | 0x200 for E1 — the same scheme as the
+///    Interception provider, so per-keyboard bindings carry over between the two.
+///
+/// Injected input (hDevice = 0, e.g. our own SendInput) is ignored to avoid feedback loops.
 /// <see cref="Install"/> must be called on a thread with a message loop (the UI thread).
 /// </summary>
-public sealed class RawMouseProvider : IInputProvider, IDeltaSource, IDisposable
+public sealed class RawInputProvider : IInputProvider, IDeltaSource, IDisposable
 {
     public const string AnyMouse = KeyboardMouseHookProvider.MouseId;
-    public const string Prefix = "rawmouse:";
+    public const string MousePrefix = "rawmouse:";
+    public const string KeyboardPrefix = "rawkbd:";
     public const int WheelPulseMs = 60;
+    private const int MaxKey = 0x400;
     private static readonly string[] ButtonNames = { "Left", "Right", "Middle", "X1", "X2", "Wheel Up", "Wheel Down", "Wheel Right", "Wheel Left" };
 
     private sealed class Dev
     {
         public required string Id;
         public required string Name;
+        public required bool IsKeyboard;
         public double PendX, PendY, CurX, CurY, BindX, BindY;
         public int PendN, CurN;
         public readonly bool[] Buttons = new bool[5];
         public readonly long[] WheelUntil = new long[4];
+        public bool[]? Keys;
     }
 
     private readonly object _lock = new();
     private readonly Dictionary<IntPtr, Dev> _byHandle = new();
-    private readonly Dev _any = new() { Id = AnyMouse, Name = "Mouse (all mice)" };
+    private readonly Dev _any = new() { Id = AnyMouse, Name = "Mouse (all mice)", IsKeyboard = false };
     private readonly Dictionary<string, int> _ordinals = new();
     private IntPtr _hwnd;
     private WndProc? _wndProc; // keep alive
     private IReadOnlyList<DeviceInfo> _devices = Array.Empty<DeviceInfo>();
     private long _nextScan;
 
-    public string Name => "Raw Input (mouse movement)";
+    public string Name => "Raw Input";
     public IReadOnlyList<DeviceInfo> Devices => _devices;
 
     public void Install()
@@ -55,8 +65,12 @@ public sealed class RawMouseProvider : IInputProvider, IDeltaSource, IDisposable
         };
         RegisterClassEx(ref wc);
         _hwnd = CreateWindowEx(0, "UcrNextRawInput", "", 0, 0, 0, 0, 0, HWND_MESSAGE, IntPtr.Zero, wc.hInstance, IntPtr.Zero);
-        var rid = new[] { new RAWINPUTDEVICE { usUsagePage = 0x01, usUsage = 0x02, dwFlags = RIDEV_INPUTSINK, hwndTarget = _hwnd } };
-        RegisterRawInputDevices(rid, 1, (uint)Marshal.SizeOf<RAWINPUTDEVICE>());
+        var rid = new[]
+        {
+            new RAWINPUTDEVICE { usUsagePage = 0x01, usUsage = 0x02, dwFlags = RIDEV_INPUTSINK, hwndTarget = _hwnd }, // mice
+            new RAWINPUTDEVICE { usUsagePage = 0x01, usUsage = 0x06, dwFlags = RIDEV_INPUTSINK, hwndTarget = _hwnd }, // keyboards
+        };
+        RegisterRawInputDevices(rid, (uint)rid.Length, (uint)Marshal.SizeOf<RAWINPUTDEVICE>());
         Rescan();
     }
 
@@ -80,22 +94,38 @@ public sealed class RawMouseProvider : IInputProvider, IDeltaSource, IDisposable
             if (GetRawInputData(hRaw, RID_INPUT, h.AddrOfPinnedObject(), ref size, (uint)HeaderSize) == unchecked((uint)-1)) return;
         }
         finally { h.Free(); }
-        if (BitConverter.ToUInt32(_buf, 0) != RIM_TYPEMOUSE) return;
+        uint type = BitConverter.ToUInt32(_buf, 0);
         IntPtr device = (IntPtr)BitConverter.ToInt64(_buf, 8);
         if (device == IntPtr.Zero) return; // injected (SendInput) — ignore to avoid feedback
-
         int o = HeaderSize;
-        ushort flags = BitConverter.ToUInt16(_buf, o);
+
+        if (type == RIM_TYPEKEYBOARD)
+        {
+            ushort makeCode = BitConverter.ToUInt16(_buf, o);
+            ushort flags = BitConverter.ToUInt16(_buf, o + 2);
+            if (makeCode == 0 || makeCode == 0xFF) return; // overrun / fake codes
+            int idx = (makeCode & 0xFF) | ((flags & RI_KEY_E0) != 0 ? 0x100 : 0) | ((flags & RI_KEY_E1) != 0 ? 0x200 : 0);
+            bool down = (flags & RI_KEY_BREAK) == 0;
+            lock (_lock)
+            {
+                var dev = DevFor(device, keyboard: true);
+                if (idx < MaxKey) dev.Keys![idx] = down;
+            }
+            return;
+        }
+        if (type != RIM_TYPEMOUSE) return;
+
+        ushort mflags = BitConverter.ToUInt16(_buf, o);
         ushort buttonFlags = BitConverter.ToUInt16(_buf, o + 4);
         short buttonData = BitConverter.ToInt16(_buf, o + 6);
         int dx = BitConverter.ToInt32(_buf, o + 12);
         int dy = BitConverter.ToInt32(_buf, o + 16);
-        bool relative = (flags & MOUSE_MOVE_ABSOLUTE) == 0;
+        bool relative = (mflags & MOUSE_MOVE_ABSOLUTE) == 0;
         long now = Environment.TickCount64;
 
         lock (_lock)
         {
-            var dev = DevFor(device);
+            var dev = DevFor(device, keyboard: false);
             foreach (var d in new[] { dev, _any })
             {
                 if (relative && (dx != 0 || dy != 0))
@@ -114,20 +144,25 @@ public sealed class RawMouseProvider : IInputProvider, IDeltaSource, IDisposable
         }
     }
 
-    private Dev DevFor(IntPtr handle)
+    private Dev DevFor(IntPtr handle, bool keyboard)
     {
         if (_byHandle.TryGetValue(handle, out var d)) return d;
         string path = DeviceName(handle) ?? "";
         var m = Regex.Match(path, @"VID_([0-9A-F]{4}).*?PID_([0-9A-F]{4})", RegexOptions.IgnoreCase);
         string key = m.Success ? $"{m.Groups[1].Value.ToUpperInvariant()}:{m.Groups[2].Value.ToUpperInvariant()}" : "0000:0000";
-        int n = _ordinals[key] = _ordinals.TryGetValue(key, out var c) ? c + 1 : 1;
+        string prefix = keyboard ? KeyboardPrefix : MousePrefix;
+        int n = _ordinals[prefix + key] = _ordinals.TryGetValue(prefix + key, out var c) ? c + 1 : 1;
+        string kind = keyboard ? "Keyboard" : "Mouse";
         d = new Dev
         {
-            Id = $"{Prefix}{key}#{n}",
-            Name = (m.Success ? $"Mouse {key}" : "Mouse (unknown)") + (n > 1 ? $" #{n}" : ""),
+            Id = $"{prefix}{key}#{n}",
+            Name = (m.Success ? $"{kind} {key}" : $"{kind} (built-in / unknown)") + (n > 1 ? $" #{n}" : ""),
+            IsKeyboard = keyboard,
+            Keys = keyboard ? new bool[MaxKey] : null,
         };
         _byHandle[handle] = d;
-        _devices = _byHandle.Values.Select(x => new DeviceInfo(x.Id, x.Name, Name, 9, 2)).ToList();
+        _devices = _byHandle.Values.OrderBy(x => x.IsKeyboard).ThenBy(x => x.Id)
+            .Select(x => new DeviceInfo(x.Id, x.Name, Name, x.IsKeyboard ? 256 : 9, x.IsKeyboard ? 0 : 2)).ToList();
         return d;
     }
 
@@ -138,8 +173,8 @@ public sealed class RawMouseProvider : IInputProvider, IDeltaSource, IDisposable
         var list = new RAWINPUTDEVICELIST[count];
         if (GetRawInputDeviceList(list, ref count, cb) == unchecked((uint)-1)) return;
         lock (_lock)
-            foreach (var d in list.Take((int)count).Where(d => d.dwType == RIM_TYPEMOUSE))
-                DevFor(d.hDevice);
+            foreach (var d in list.Take((int)count).Where(d => d.dwType is RIM_TYPEMOUSE or RIM_TYPEKEYBOARD))
+                DevFor(d.hDevice, d.dwType == RIM_TYPEKEYBOARD);
     }
 
     /// <summary>Called by the engine thread each tick: publishes the movement gathered since the last tick.</summary>
@@ -149,6 +184,7 @@ public sealed class RawMouseProvider : IInputProvider, IDeltaSource, IDisposable
         {
             foreach (var d in _byHandle.Values.Append(_any))
             {
+                if (d.IsKeyboard) continue;
                 d.CurX = d.PendX; d.CurY = d.PendY; d.CurN = d.PendN;
                 d.PendX = d.PendY = 0; d.PendN = 0;
             }
@@ -157,18 +193,13 @@ public sealed class RawMouseProvider : IInputProvider, IDeltaSource, IDisposable
         if (now >= _nextScan) { _nextScan = now + 5000; try { Rescan(); } catch { } }
     }
 
-    private Dev? Find(string id)
-    {
-        if (id == AnyMouse) return _any;
-        if (!id.StartsWith(Prefix, StringComparison.Ordinal)) return null;
-        return _byHandle.Values.FirstOrDefault(d => d.Id == id);
-    }
+    private Dev? Find(string id) => id == AnyMouse ? _any : _byHandle.Values.FirstOrDefault(d => d.Id == id);
 
     public bool TryReadDelta(InputRef input, out double sum, out int events)
     {
         sum = 0; events = 0;
         if (input.Kind != InputKind.Delta) return false;
-        bool ours = input.DeviceId == AnyMouse || input.DeviceId.StartsWith(Prefix, StringComparison.Ordinal);
+        bool ours = input.DeviceId == AnyMouse || input.DeviceId.StartsWith(MousePrefix, StringComparison.Ordinal);
         if (!ours) return false;
         lock (_lock)
         {
@@ -181,13 +212,20 @@ public sealed class RawMouseProvider : IInputProvider, IDeltaSource, IDisposable
     public bool TryRead(InputRef input, out double value)
     {
         value = 0;
-        bool any = input.DeviceId == AnyMouse;
-        if (!any && !input.DeviceId.StartsWith(Prefix, StringComparison.Ordinal)) return false;
+        string id = input.DeviceId;
+        if (id.StartsWith(KeyboardPrefix, StringComparison.Ordinal))
+        {
+            lock (_lock)
+                if (Find(id) is { Keys: { } keys } && input.Index is >= 0 and < MaxKey) value = keys[input.Index] ? 1 : 0;
+            return true;
+        }
+        bool any = id == AnyMouse;
+        if (!any && !id.StartsWith(MousePrefix, StringComparison.Ordinal)) return false;
         // "Any mouse" buttons 0-4 belong to the hook provider (which can block them).
         if (any && input.Kind == InputKind.Button && input.Index < 5) return false;
         lock (_lock)
         {
-            var d = Find(input.DeviceId);
+            var d = Find(id);
             if (d is null) return true;
             if (input.Kind == InputKind.Delta) value = input.Index == 1 ? d.CurY : d.CurX;
             else if (input.Kind == InputKind.Button && input.Index is >= 0 and < 5) value = d.Buttons[input.Index] ? 1 : 0;
@@ -197,8 +235,8 @@ public sealed class RawMouseProvider : IInputProvider, IDeltaSource, IDisposable
     }
 
     /// <summary>
-    /// For press-to-bind: movement since the previous call, scaled so ~20 counts reads as full
-    /// deflection; plus pressed per-device buttons and wheel pulses.
+    /// For press-to-bind: movement since the previous call (≈20 counts = full deflection),
+    /// pressed per-device mouse buttons, wheel pulses and pressed per-keyboard keys.
     /// </summary>
     public IEnumerable<(InputRef Input, double Value)> ReadAll()
     {
@@ -208,6 +246,12 @@ public sealed class RawMouseProvider : IInputProvider, IDeltaSource, IDisposable
         {
             foreach (var d in _byHandle.Values.Append(_any))
             {
+                if (d.IsKeyboard)
+                {
+                    for (int k = 0; k < MaxKey; k++)
+                        if (d.Keys![k]) list.Add((new InputRef(d.Id, InputKind.Button, k, $"{d.Name} Key {InterceptionProvider.KeyName(k)}"), 1));
+                    continue;
+                }
                 list.Add((new InputRef(d.Id, InputKind.Delta, 0, $"{d.Name} movement X"), Math.Clamp(d.BindX / 20.0, -1, 1)));
                 list.Add((new InputRef(d.Id, InputKind.Delta, 1, $"{d.Name} movement Y"), Math.Clamp(d.BindY / 20.0, -1, 1)));
                 d.BindX = d.BindY = 0;
@@ -238,8 +282,12 @@ public sealed class RawMouseProvider : IInputProvider, IDeltaSource, IDisposable
     public void Dispose()
     {
         if (_hwnd == IntPtr.Zero) return;
-        var rid = new[] { new RAWINPUTDEVICE { usUsagePage = 0x01, usUsage = 0x02, dwFlags = RIDEV_REMOVE, hwndTarget = IntPtr.Zero } };
-        RegisterRawInputDevices(rid, 1, (uint)Marshal.SizeOf<RAWINPUTDEVICE>());
+        var rid = new[]
+        {
+            new RAWINPUTDEVICE { usUsagePage = 0x01, usUsage = 0x02, dwFlags = RIDEV_REMOVE, hwndTarget = IntPtr.Zero },
+            new RAWINPUTDEVICE { usUsagePage = 0x01, usUsage = 0x06, dwFlags = RIDEV_REMOVE, hwndTarget = IntPtr.Zero },
+        };
+        RegisterRawInputDevices(rid, (uint)rid.Length, (uint)Marshal.SizeOf<RAWINPUTDEVICE>());
         DestroyWindow(_hwnd);
         _hwnd = IntPtr.Zero;
     }
@@ -247,8 +295,9 @@ public sealed class RawMouseProvider : IInputProvider, IDeltaSource, IDisposable
     // ---- interop ----
     private static readonly int HeaderSize = Marshal.SizeOf<RAWINPUTHEADER>();
     private const uint WM_INPUT = 0x00FF, RID_INPUT = 0x10000003, RIDI_DEVICENAME = 0x20000007;
-    private const uint RIM_TYPEMOUSE = 0, RIDEV_INPUTSINK = 0x100, RIDEV_REMOVE = 0x1;
+    private const uint RIM_TYPEMOUSE = 0, RIM_TYPEKEYBOARD = 1, RIDEV_INPUTSINK = 0x100, RIDEV_REMOVE = 0x1;
     private const ushort MOUSE_MOVE_ABSOLUTE = 0x01, RI_MOUSE_WHEEL = 0x0400, RI_MOUSE_HWHEEL = 0x0800;
+    private const ushort RI_KEY_BREAK = 0x01, RI_KEY_E0 = 0x02, RI_KEY_E1 = 0x04;
     private static readonly IntPtr HWND_MESSAGE = new(-3);
 
     private delegate IntPtr WndProc(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);

@@ -275,6 +275,16 @@ public class UcrImportTests
     }
 
     [Fact]
+    public void Per_device_keyboard_through_raw_input()
+    {
+        var r = new UcrImporter(ScanToVk, UcrImporter.PerDevice.RawInput).Import(XDocument.Parse(ContextXml));
+        var look = r.Profiles[0].Bindings.Single(b => b.Name == "Look");
+        Assert.Equal(new InputRef("rawkbd:046D:C31C#1", InputKind.Button, 0x01), look.Input);
+        Assert.False(look.Block);                                   // Raw Input can't block…
+        Assert.Contains(r.Notes, n => n.Contains("\"Look\"") && n.Contains("Interception"));   // …and the report says so
+    }
+
+    [Fact]
     public void Axis_to_button_high_only_and_unsupported_plugins_are_reported()
     {
         var r = Run();

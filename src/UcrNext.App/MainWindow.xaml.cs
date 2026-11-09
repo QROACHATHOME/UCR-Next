@@ -118,14 +118,13 @@ public partial class MainWindow : Window
         };
         if (dlg.ShowDialog(this) != true) return;
 
-        bool perDevice = false;
-        if (_vm.InterceptionRunning)
-        {
-            perDevice = MessageBox.Show(this,
-                "Keep UCR's per-keyboard / per-mouse bindings tied to the specific device?\n\n" +
-                "Yes = per device (uses Interception)\nNo = accept them from any keyboard / mouse",
-                "Import UCR profiles", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
-        }
+        string how = _vm.InterceptionRunning
+            ? "Yes = per device through Interception (can also block keys)"
+            : "Yes = per device through Raw Input (no driver; the original key still reaches the game)";
+        bool perDevice = MessageBox.Show(this,
+            "Keep UCR's per-keyboard / per-mouse bindings tied to the specific device?\n\n" +
+            how + "\nNo = accept them from any keyboard / mouse (can block keys)",
+            "Import UCR profiles", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
 
         try
         {

@@ -41,19 +41,32 @@ public sealed class UcrImporter
     private const int DiButtonsOffset = 48; // SharpDX JoystickOffset.Buttons0
     private const int DiPovBase = 128;      // UCR-Next DirectInputProvider.PovBase
 
+    /// <summary>How UCR's per-keyboard / per-mouse (Interception) inputs are imported.</summary>
+    public enum PerDevice
+    {
+        /// <summary>"Any keyboard / any mouse" — works everywhere, can block.</summary>
+        Any,
+        /// <summary>Per device through Raw Input — no driver, but cannot block the original input.</summary>
+        RawInput,
+        /// <summary>Per device through the Interception driver — can block (needs the driver).</summary>
+        Interception,
+    }
+
     private readonly Func<int, int> _scanToVk;
-    private readonly bool _perDeviceKeyboards;
+    private readonly PerDevice _perDevice;
+    private bool _perDeviceKeyboards => _perDevice != PerDevice.Any;
 
     /// <param name="scanToVk">Scan code (0xE0xx for extended keys) to Win32 virtual-key code; 0 if unknown.</param>
-    /// <param name="perDeviceKeyboards">
-    /// Keep UCR's per-keyboard/per-mouse (Interception) inputs per device. If false they become
-    /// "any keyboard / any mouse" bindings, which work without the Interception driver.
-    /// </param>
-    public UcrImporter(Func<int, int> scanToVk, bool perDeviceKeyboards)
+    /// <param name="perDevice">How per-keyboard / per-mouse inputs are imported.</param>
+    public UcrImporter(Func<int, int> scanToVk, PerDevice perDevice)
     {
         _scanToVk = scanToVk;
-        _perDeviceKeyboards = perDeviceKeyboards;
+        _perDevice = perDevice;
     }
+
+    /// <summary>Compatibility: true = per device through Interception.</summary>
+    public UcrImporter(Func<int, int> scanToVk, bool perDeviceKeyboards)
+        : this(scanToVk, perDeviceKeyboards ? PerDevice.Interception : PerDevice.Any) { }
 
     public UcrImportResult ImportFile(string path) => Import(XDocument.Load(path));
 
@@ -182,7 +195,7 @@ public sealed class UcrImporter
                     Input = input.Ref,
                     Output = output,
                     Settings = settings,
-                    Block = input.Block && IsBlockable(input.Ref),
+                    Block = BlockFor(input.Ref, input.Block, m.Title, notes),
                 });
             }
 
@@ -199,7 +212,7 @@ public sealed class UcrImporter
                     ExtraInputs = extras.Select(i => In(i).Ref).ToList(),
                     Output = output,
                     Settings = settings,
-                    Block = input.Block && IsBlockable(input.Ref),
+                    Block = BlockFor(input.Ref, input.Block, m.Title, notes),
                 });
             }
 
@@ -412,8 +425,10 @@ public sealed class UcrImporter
                     bool e0 = b.Value >= 256;
                     int vk = ScanToVk(sc, e0);
                     string keyName = vk != 0 ? VirtualKeys.Name(vk) : $"SC {(e0 ? "E0 " : "")}{sc:X2}";
-                    if (_perDeviceKeyboards)
+                    if (_perDevice == PerDevice.Interception)
                         return new InputRef($"ikbd:{hw}#{dev.Number + 1}", InputKind.Button, sc | (e0 ? 0x100 : 0), $"{dev.Title} Key {keyName}");
+                    if (_perDevice == PerDevice.RawInput && TryVidPid(hw, out int kv, out int kp))
+                        return new InputRef($"rawkbd:{kv:X4}:{kp:X4}#{dev.Number + 1}", InputKind.Button, sc | (e0 ? 0x100 : 0), $"{dev.Title} Key {keyName}");
                     if (vk == 0) { why = $"no virtual-key code for scan code {(e0 ? "E0 " : "")}{sc:X2}"; return null; }
                     return new InputRef("keyboard", InputKind.Button, vk, $"Key {keyName}");
                 }
@@ -426,9 +441,12 @@ public sealed class UcrImporter
                     switch (b.Type)
                     {
                         case 1 when b.Value is >= 0 and < 5:
-                            return _perDeviceKeyboards
-                                ? new InputRef($"imouse:{hw}#{dev.Number + 1}", InputKind.Button, b.Value, $"{dev.Title} {MouseNames[b.Value]}")
-                                : new InputRef("mouse", InputKind.Button, b.Value, $"Mouse {MouseNames[b.Value]}");
+                            return _perDevice switch
+                            {
+                                PerDevice.Interception => new InputRef($"imouse:{hw}#{dev.Number + 1}", InputKind.Button, b.Value, $"{dev.Title} {MouseNames[b.Value]}"),
+                                PerDevice.RawInput when rawId != "mouse" => new InputRef(rawId, InputKind.Button, b.Value, $"{dev.Title} {MouseNames[b.Value]}"),
+                                _ => new InputRef("mouse", InputKind.Button, b.Value, $"Mouse {MouseNames[b.Value]}"),
+                            };
                         case 1 when b.Value is >= 5 and < 9: // Wheel Up, Down, Right, Left
                             return new InputRef(anyOrRaw, InputKind.Button, b.Value, $"{who} {WheelNames[b.Value - 5]}");
                         case 0 when b.Value is 0 or 1:      // movement X / Y
@@ -544,6 +562,14 @@ public sealed class UcrImporter
         };
         if (vk == 0 && e0 && sc == 0x35) vk = 0x6F;                          // Numpad /
         return vk;
+    }
+
+    private static bool BlockFor(InputRef r, bool block, string mapping, List<string> notes)
+    {
+        if (!block) return false;
+        if (IsBlockable(r)) return true;
+        notes.Add($"\"{mapping}\": blocking the original key/button needs the Interception driver (per-device Raw Input can only watch)");
+        return false;
     }
 
     private static bool IsBlockable(InputRef r) =>

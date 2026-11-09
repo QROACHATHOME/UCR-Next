@@ -16,6 +16,8 @@ Status: **0.4**. Windows 10/11 only.
   - Keyboard and mouse buttons through low-level hooks ("any keyboard / any mouse")
   - **Mouse / trackball / spinner movement and the mouse wheel** through Raw Input — no driver
     needed, any mouse or one specific mouse (`rawmouse:VID:PID#n`)
+  - **Per-keyboard keys** through Raw Input (`rawkbd:VID:PID#n`) — no driver needed, but read-only:
+    the original key still reaches other programs. To block keys on one keyboard only, use Interception.
   - **Per-device** keyboards and mice through the optional **Interception** driver
 - **Outputs**: keyboard and mouse (SendInput, scan codes), up to **four virtual Xbox 360** pads
   (P1–P4, ViGEmBus; plugged in in order so games number them correctly), **vJoy** devices 1–16
@@ -153,7 +155,7 @@ use *File → Import UCR profiles…*, or `ucrnext import path\to\context.xml`.
 
 | UCR | UCR-Next |
 |---|---|
-| Inputs: XInput, DirectInput (VID/PID + instance), Interception keyboard keys, mouse buttons, mouse movement and wheel | same devices; keyboard/mouse become "any keyboard/mouse" unless you choose per-device (keys need Interception; mouse movement/wheel per device works without it) |
+| Inputs: XInput, DirectInput (VID/PID + instance), Interception keyboard keys, mouse buttons, mouse movement and wheel | same devices; keyboard/mouse become "any keyboard/mouse" unless you choose per-device — then Interception ids if Interception is running (can block), otherwise Raw Input ids (no driver, can't block; the report lists bindings that blocked in UCR) |
 | Outputs: ViGEm Xbox 360 pads 1–4, vJoy axes/buttons, Interception keyboard keys / mouse buttons / mouse movement | virtual Xbox 360 pads P1–P4, vJoy, SendInput |
 | Plugins: Button to Button, Axis to Axis, Axes to Axes, Axis to Button, Button to Axis, Buttons to Axis, Axis Splitter, and HidWizards/UCR-Plugins: Axes to Axes (Rotation), Axes to Axes (Trim), Axes Range to Button, Axis to Axis Increment, Button to Buttons (Long Press), Delta to Axis, Delta to Buttons | converted to the binding modes above with the same maths as UCR (deadzones incl. circular, anti-deadzone, UCR's sensitivity curve, full-range triggers, timers) |
 | Block flag on inputs | *Block* on keyboard/mouse bindings |

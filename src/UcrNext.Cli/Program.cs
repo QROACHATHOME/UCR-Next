@@ -82,7 +82,8 @@ if (cmd == "import")
     if (CommandPipe.Send("status", 300) is null)
     {
         bool perDevice = rest.Contains("--per-device", StringComparer.OrdinalIgnoreCase);
-        var result = new UcrImporter(KeyMapping.ScanToVk, perDevice).ImportFile(full);
+        // Offline there is no running Interception, so per-device means Raw Input.
+        var result = new UcrImporter(KeyMapping.ScanToVk, perDevice ? UcrImporter.PerDevice.RawInput : UcrImporter.PerDevice.Any).ImportFile(full);
         var store = new ProfileStore(ProfileStore.DefaultDirectory);
         result.SaveTo(store);
         Console.WriteLine(result.Report);

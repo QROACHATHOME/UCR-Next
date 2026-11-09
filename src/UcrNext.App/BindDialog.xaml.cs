@@ -50,7 +50,7 @@ public partial class BindDialog : Window
             {
                 // Movement values are "since the last read", so no baseline comparison.
                 if (!movement || Math.Abs(value) < 1.0) continue;
-                bool perDevice = input.DeviceId.StartsWith(RawMouseProvider.Prefix);
+                bool perDevice = input.DeviceId.StartsWith(RawInputProvider.MousePrefix);
                 if (perDevice == anyDevice) continue;
                 Captured = input;
                 DialogResult = true;
@@ -68,16 +68,18 @@ public partial class BindDialog : Window
 
             string id = input.DeviceId;
             bool hookKb = id == KeyboardMouseHookProvider.KeyboardId, hookMouse = id == KeyboardMouseHookProvider.MouseId;
-            bool icptKb = id.StartsWith(InterceptionProvider.KeyboardPrefix);
-            bool icptMouse = id.StartsWith(InterceptionProvider.MousePrefix) || id.StartsWith(RawMouseProvider.Prefix);
+            bool icptKb = id.StartsWith(InterceptionProvider.KeyboardPrefix), icptMouse = id.StartsWith(InterceptionProvider.MousePrefix);
+            bool rawKb = id.StartsWith(RawInputProvider.KeyboardPrefix), rawMouse = id.StartsWith(RawInputProvider.MousePrefix);
+            bool perKb = icptKb || rawKb, perMouse = icptMouse || rawMouse;
             // Wheel "buttons" (5-8) only exist on the raw provider, for any mouse as well as per device.
-            if (hookMouse && input.Index >= 5) { Captured = input; DialogResult = true; return; }
+            bool wheel = (hookMouse || rawMouse) && input.Index >= 5;
 
-            if ((hookKb && input.Index == VK_ESCAPE) || (icptKb && input.Index == SC_ESCAPE)) { DialogResult = false; return; }
-            if ((hookMouse || icptMouse) && input.Index == (int)MouseButton.Left) continue;
-            if (anyDevice && (icptKb || icptMouse)) continue;   // take the "any keyboard/mouse" version
-            // Per-device: skip the "any" version when a per-device one exists (keyboards need Interception).
-            if (!anyDevice && (hookMouse || (hookKb && _interception))) continue;
+            if ((hookKb && input.Index == VK_ESCAPE) || (perKb && input.Index == SC_ESCAPE)) { DialogResult = false; return; }
+            if ((hookMouse || perMouse) && input.Index == (int)MouseButton.Left) continue;
+            if (anyDevice && (perKb || perMouse)) continue;          // take the "any keyboard/mouse" version
+            if (!anyDevice && ((hookKb) || (hookMouse && !wheel))) continue; // take the per-device version
+            // Per device, prefer Interception (it can also block) over Raw Input (read-only) when it runs.
+            if (!anyDevice && _interception && ((rawKb) || (rawMouse && !wheel))) continue;
 
             Captured = input;
             DialogResult = true;

@@ -411,7 +411,9 @@ public sealed class MainViewModel : Observable
     public UcrImportResult ImportUcr(string path, bool perDevice)
     {
         Flush();
-        var result = new UcrImporter(KeyMapping.ScanToVk, perDevice).ImportFile(path);
+        var mode = !perDevice ? UcrImporter.PerDevice.Any
+            : InterceptionRunning ? UcrImporter.PerDevice.Interception : UcrImporter.PerDevice.RawInput;
+        var result = new UcrImporter(KeyMapping.ScanToVk, mode).ImportFile(path);
         result.SaveTo(_s.Store);
         LoadProfiles();
         Status = $"Imported {result.Profiles.Count} UCR profile(s) — they start disabled; tick the ones you want";
