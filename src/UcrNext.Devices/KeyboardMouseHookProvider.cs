@@ -17,10 +17,40 @@ public sealed class KeyboardMouseHookProvider : IInputProvider, IDisposable
 
     private readonly bool[] _keys = new bool[256];
     private readonly bool[] _mouse = new bool[5];
+    // Block bookkeeping: a key whose "down" was passed on always gets its "up" passed on.
+    private readonly bool[] _passed = new bool[256 + 5];
+    private readonly bool[] _blockedDown = new bool[256 + 5];
+    private readonly Func<InputRef, bool> _isBlocked;
+    private readonly Func<bool> _anyBlocks;
     private IntPtr _kbHook, _mouseHook;
     private HookProc? _kbProc, _mouseProc; // keep delegates alive
 
+    public KeyboardMouseHookProvider(Func<InputRef, bool>? isBlocked = null, Func<bool>? anyBlocks = null)
+    {
+        _isBlocked = isBlocked ?? (_ => false);
+        _anyBlocks = anyBlocks ?? (() => false);
+    }
+
+    /// <summary>Returns false if the event must be swallowed. <paramref name="slot"/>: 0-255 keys, 256+ mouse.</summary>
+    private bool Decide(int slot, InputRef input, bool down)
+    {
+        if (down)
+        {
+            if (_passed[slot]) return true;
+            if (_blockedDown[slot]) return false;
+            if (_anyBlocks() && _isBlocked(input)) { _blockedDown[slot] = true; return false; }
+            _passed[slot] = true;
+            return true;
+        }
+        if (_passed[slot]) { _passed[slot] = false; return true; }
+        if (_blockedDown[slot]) { _blockedDown[slot] = false; return false; }
+        return true;
+    }
+
     public string Name => "Keyboard / Mouse";
+
+    /// <summary>Raised (on the UI thread) when Ctrl+Alt+Pause is pressed.</summary>
+    public event Action? PanicPressed;
 
     public IReadOnlyList<DeviceInfo> Devices { get; } = new[]
     {
@@ -77,7 +107,19 @@ public sealed class KeyboardMouseHookProvider : IInputProvider, IDisposable
                 int msg = wParam.ToInt32();
                 bool down = msg is WM_KEYDOWN or WM_SYSKEYDOWN;
                 bool up = msg is WM_KEYUP or WM_SYSKEYUP;
-                if (down || up) Volatile.Write(ref _keys[info.vkCode], down);
+                if (down || up)
+                {
+                    int vk = (int)info.vkCode;
+                    Volatile.Write(ref _keys[vk], down);
+                    // Panic hotkey Ctrl+Alt+Pause: always passes through, raises the event.
+                    if (down && (vk == VK_PAUSE || vk == VK_CANCEL) && (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0 && (GetAsyncKeyState(VK_MENU) & 0x8000) != 0)
+                    {
+                        try { PanicPressed?.Invoke(); } catch { }
+                    }
+                    bool pass = true;
+                    try { pass = Decide(vk, new InputRef(KeyboardId, InputKind.Button, vk), down); } catch { }
+                    if (!pass) return (IntPtr)1;
+                }
             }
         }
         return CallNextHookEx(_kbHook, nCode, wParam, lParam);
@@ -90,16 +132,25 @@ public sealed class KeyboardMouseHookProvider : IInputProvider, IDisposable
             var info = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
             if ((info.flags & LLMHF_INJECTED) == 0)
             {
+                int button = -1;
+                bool down = false;
                 switch (wParam.ToInt32())
                 {
-                    case 0x0201: _mouse[0] = true; break;  // WM_LBUTTONDOWN
-                    case 0x0202: _mouse[0] = false; break; // WM_LBUTTONUP
-                    case 0x0204: _mouse[1] = true; break;  // WM_RBUTTONDOWN
-                    case 0x0205: _mouse[1] = false; break;
-                    case 0x0207: _mouse[2] = true; break;  // WM_MBUTTONDOWN
-                    case 0x0208: _mouse[2] = false; break;
-                    case 0x020B: _mouse[XIndex(info.mouseData)] = true; break;  // WM_XBUTTONDOWN
-                    case 0x020C: _mouse[XIndex(info.mouseData)] = false; break; // WM_XBUTTONUP
+                    case 0x0201: button = 0; down = true; break; // WM_LBUTTONDOWN
+                    case 0x0202: button = 0; break;              // WM_LBUTTONUP
+                    case 0x0204: button = 1; down = true; break; // WM_RBUTTONDOWN
+                    case 0x0205: button = 1; break;
+                    case 0x0207: button = 2; down = true; break; // WM_MBUTTONDOWN
+                    case 0x0208: button = 2; break;
+                    case 0x020B: button = XIndex(info.mouseData); down = true; break; // WM_XBUTTONDOWN
+                    case 0x020C: button = XIndex(info.mouseData); break;              // WM_XBUTTONUP
+                }
+                if (button >= 0)
+                {
+                    _mouse[button] = down;
+                    bool pass = true;
+                    try { pass = Decide(256 + button, new InputRef(MouseId, InputKind.Button, button), down); } catch { }
+                    if (!pass) return (IntPtr)1;
                 }
             }
         }
@@ -115,6 +166,8 @@ public sealed class KeyboardMouseHookProvider : IInputProvider, IDisposable
         _kbHook = _mouseHook = IntPtr.Zero;
     }
 
+    private const int VK_PAUSE = 0x13, VK_CANCEL = 0x03, VK_CONTROL = 0x11, VK_MENU = 0x12;
+    [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int vKey);
     private const int WH_KEYBOARD_LL = 13, WH_MOUSE_LL = 14;
     private const int WM_KEYDOWN = 0x0100, WM_KEYUP = 0x0101, WM_SYSKEYDOWN = 0x0104, WM_SYSKEYUP = 0x0105;
     private const uint LLKHF_INJECTED = 0x10, LLMHF_INJECTED = 0x01;

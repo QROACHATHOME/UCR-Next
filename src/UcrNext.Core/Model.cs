@@ -36,7 +36,11 @@ public sealed class InputRef : IEquatable<InputRef>
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum OutputTarget { Keyboard, Mouse, Xbox360 }
+public enum OutputTarget { Keyboard, Mouse, Xbox360, VJoy }
+
+/// <summary>Axes of a vJoy device. Order matters (used as index).</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum VJoyAxis { X, Y, Z, RX, RY, RZ, Slider0, Slider1 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum OutputKind { Button, Axis }
@@ -63,16 +67,24 @@ public enum MouseAxis { X, Y }
 /// Identifies one output control. Index meaning depends on Target/Kind:
 /// Keyboard/Button = Win32 virtual-key code; Mouse/Button = <see cref="MouseButton"/>;
 /// Mouse/Axis = <see cref="MouseAxis"/>; Xbox360/Button = <see cref="XboxButton"/>;
-/// Xbox360/Axis = <see cref="XboxAxis"/>.
+/// Xbox360/Axis = <see cref="XboxAxis"/>; VJoy/Button = button number - 1; VJoy/Axis = <see cref="VJoyAxis"/>.
 /// </summary>
 public sealed class OutputRef : IEquatable<OutputRef>
 {
     public OutputTarget Target { get; set; }
     public OutputKind Kind { get; set; }
     public int Index { get; set; }
+    /// <summary>vJoy device number (1-16). 0 for other targets.</summary>
+    public int Device { get; set; }
 
     public OutputRef() { }
-    public OutputRef(OutputTarget target, OutputKind kind, int index) { Target = target; Kind = kind; Index = index; }
+    public OutputRef(OutputTarget target, OutputKind kind, int index, int device = 0)
+    {
+        Target = target; Kind = kind; Index = index; Device = device;
+    }
+
+    public static OutputRef VJoy(int device, VJoyAxis a) => new(OutputTarget.VJoy, OutputKind.Axis, (int)a, device);
+    public static OutputRef VJoyButton(int device, int buttonNumber) => new(OutputTarget.VJoy, OutputKind.Button, buttonNumber - 1, device);
 
     public static OutputRef Key(int vk) => new(OutputTarget.Keyboard, OutputKind.Button, vk);
     public static OutputRef Xbox(XboxButton b) => new(OutputTarget.Xbox360, OutputKind.Button, (int)b);
@@ -80,12 +92,14 @@ public sealed class OutputRef : IEquatable<OutputRef>
     public static OutputRef Mouse(MouseButton b) => new(OutputTarget.Mouse, OutputKind.Button, (int)b);
     public static OutputRef Mouse(MouseAxis a) => new(OutputTarget.Mouse, OutputKind.Axis, (int)a);
 
+    [JsonIgnore]
     public bool IsTrigger => Target == OutputTarget.Xbox360 && Kind == OutputKind.Axis &&
                              (Index == (int)XboxAxis.LeftTrigger || Index == (int)XboxAxis.RightTrigger);
 
-    public bool Equals(OutputRef? o) => o is not null && Target == o.Target && Kind == o.Kind && Index == o.Index;
+    public bool Equals(OutputRef? o) =>
+        o is not null && Target == o.Target && Kind == o.Kind && Index == o.Index && Device == o.Device;
     public override bool Equals(object? obj) => Equals(obj as OutputRef);
-    public override int GetHashCode() => HashCode.Combine(Target, Kind, Index);
+    public override int GetHashCode() => HashCode.Combine(Target, Kind, Index, Device);
     public override string ToString() => OutputNames.Describe(this);
 }
 
@@ -109,6 +123,11 @@ public sealed class Binding
     public InputRef? Input { get; set; }
     public OutputRef? Output { get; set; }
     public AxisSettings Settings { get; set; } = new();
+    /// <summary>
+    /// Stop the physical input from reaching other programs while this binding is active.
+    /// Works for keyboard keys and mouse buttons (all devices via hooks, or one device via Interception).
+    /// </summary>
+    public bool Block { get; set; }
 }
 
 public sealed class Profile
@@ -116,5 +135,27 @@ public sealed class Profile
     public Guid Id { get; set; } = Guid.NewGuid();
     public string Name { get; set; } = "New profile";
     public bool Enabled { get; set; } = true;
+    /// <summary>
+    /// Executable names (e.g. "game.exe"). When non-empty the profile is only active while one of
+    /// these programs has the foreground window. Empty = active everywhere.
+    /// </summary>
+    public List<string> Applications { get; set; } = new();
     public List<Binding> Bindings { get; set; } = new();
+
+    /// <summary>True if the profile applies while <paramref name="foregroundExe"/> is in front.</summary>
+    public static bool AppliesTo(IReadOnlyCollection<string> applications, string? foregroundExe)
+    {
+        if (applications.Count == 0) return true;
+        if (string.IsNullOrEmpty(foregroundExe)) return false;
+        foreach (var a in applications)
+            if (string.Equals(NormalizeExe(a), foregroundExe, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    /// <summary>"C:\Games\Game.EXE" or "game" -> "Game.EXE" / "game.exe".</summary>
+    public static string NormalizeExe(string name)
+    {
+        var n = Path.GetFileName(name.Trim().Trim('"'));
+        return n.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? n : n + ".exe";
+    }
 }

@@ -46,6 +46,41 @@ public sealed class PadState : IEquatable<PadState>
     }
 }
 
+/// <summary>A configured vJoy device and the controls it has.</summary>
+public sealed record VJoyDeviceInfo(int Id, IReadOnlyList<VJoyAxis> Axes, int Buttons);
+
+/// <summary>Full state of one vJoy device.</summary>
+public sealed class VJoyState : IEquatable<VJoyState>
+{
+    public const int MaxButtons = 128;
+    public bool[] Buttons { get; } = new bool[MaxButtons];
+    /// <summary>-1..1 per <see cref="VJoyAxis"/>; 0 = centre.</summary>
+    public double[] Axes { get; } = new double[Enum.GetValues<VJoyAxis>().Length];
+
+    public bool Equals(VJoyState? o) => o is not null && Buttons.SequenceEqual(o.Buttons) && Axes.SequenceEqual(o.Axes);
+    public override bool Equals(object? obj) => Equals(obj as VJoyState);
+    public override int GetHashCode() => 0;
+    public VJoyState Clone()
+    {
+        var c = new VJoyState();
+        Array.Copy(Buttons, c.Buttons, Buttons.Length);
+        Array.Copy(Axes, c.Axes, Axes.Length);
+        return c;
+    }
+}
+
+/// <summary>vJoy virtual joystick output.</summary>
+public interface IVJoyOutput
+{
+    bool IsAvailable { get; }
+    string Status { get; }
+    IReadOnlyList<VJoyDeviceInfo> Devices { get; }
+    /// <summary>Acquires the device if needed and sends the full state.</summary>
+    void Update(int device, VJoyState state);
+    /// <summary>Centres and releases the device.</summary>
+    void Release(int device);
+}
+
 /// <summary>Virtual gamepad output (ViGEm on Windows).</summary>
 public interface IVirtualPadOutput
 {

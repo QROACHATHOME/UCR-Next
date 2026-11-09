@@ -9,5 +9,6 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Nefarius.ViGEm.Client" Version="1.21.256" />
+    <PackageReference Include="Vortice.DirectInput" Version="3.8.3" />
   </ItemGroup>
 </Project>

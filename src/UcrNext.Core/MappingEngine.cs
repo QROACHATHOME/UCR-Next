@@ -3,7 +3,9 @@ using System.Text.Json;
 namespace UcrNext.Core;
 
 /// <summary>
-/// Evaluates all enabled bindings of all enabled profiles once per <see cref="Tick"/>.
+/// Evaluates all enabled bindings of all active profiles once per <see cref="Tick"/>.
+/// A profile is active when it is enabled and either lists no applications or lists the
+/// current <see cref="ForegroundApp"/>.
 /// The engine is state based: each tick it computes the complete desired output state and
 /// only sends the differences, so keys can never get stuck when a binding is removed.
 /// </summary>
@@ -12,47 +14,83 @@ public sealed class MappingEngine
     /// <summary>Mouse movement in pixels per tick at full deflection and sensitivity 1.</summary>
     public const double MousePixelsPerTick = 6.0;
 
+    private sealed record CompiledProfile(string Name, string[] Apps, Binding[] Bindings);
+
+    private static readonly HashSet<InputRef> NoBlocks = new();
+
     private readonly IInputSource _input;
     private readonly IKeyboardMouseOutput _km;
     private readonly IVirtualPadOutput? _pad;
+    private readonly IVJoyOutput? _vjoy;
     private readonly object _gate = new();
 
+    private CompiledProfile[] _profiles = Array.Empty<CompiledProfile>();
+    private bool _profilesChanged = true;
+    private string _activeKey = "\0";
+    private string? _lastFg;
     private Binding[] _bindings = Array.Empty<Binding>();
+    private string[] _activeNames = Array.Empty<string>();
+    private volatile HashSet<InputRef> _blocked = NoBlocks;
+    private HashSet<InputRef> _blockCandidates = NoBlocks;
+
     private readonly HashSet<int> _keysDown = new();
     private readonly HashSet<MouseButton> _mouseDown = new();
     private readonly PadState _lastPad = new();
     private bool _padUsed;
     private bool _padSent;
+    private readonly Dictionary<int, VJoyState> _lastVJoy = new();
     private double _mouseRemX, _mouseRemY;
+    private bool _active = true;
+    private volatile string? _foreground;
 
-    public MappingEngine(IInputSource input, IKeyboardMouseOutput km, IVirtualPadOutput? pad)
+    public MappingEngine(IInputSource input, IKeyboardMouseOutput km, IVirtualPadOutput? pad, IVJoyOutput? vjoy = null)
     {
-        _input = input; _km = km; _pad = pad;
+        _input = input; _km = km; _pad = pad; _vjoy = vjoy;
     }
 
-    /// <summary>Number of bindings currently active.</summary>
-    public int ActiveBindingCount => _bindings.Length;
+    /// <summary>Executable name of the foreground program, e.g. "game.exe" (set by the host).</summary>
+    public string? ForegroundApp
+    {
+        get => _foreground;
+        set => _foreground = value;
+    }
 
-    /// <summary>Replaces the active bindings with a deep copy of the enabled ones.</summary>
+    /// <summary>Number of bindings currently active (after the per-application filter).</summary>
+    public int ActiveBindingCount { get { lock (_gate) return _bindings.Length; } }
+
+    /// <summary>Names of the profiles currently active (after the per-application filter).</summary>
+    public IReadOnlyList<string> ActiveProfileNames { get { lock (_gate) return _activeNames; } }
+
+    /// <summary>
+    /// True if a physical input must not reach other programs right now. Thread-safe and
+    /// lock-free: called from input hook callbacks.
+    /// </summary>
+    public bool IsBlocked(InputRef input) => _blocked.Contains(input);
+
+    /// <summary>True if any active binding wants to block at all (cheap pre-check for hooks).</summary>
+    public bool HasBlocks => _blocked.Count > 0;
+
+    /// <summary>Replaces the profiles with a deep copy of the enabled ones.</summary>
     public void SetProfiles(IEnumerable<Profile> profiles)
     {
         var copy = profiles
             .Where(p => p.Enabled)
-            .SelectMany(p => p.Bindings)
-            .Where(b => b.Enabled && b.Input is not null && b.Output is not null)
-            .Select(Clone)
+            .Select(p => new CompiledProfile(
+                p.Name,
+                p.Applications.Where(a => !string.IsNullOrWhiteSpace(a)).Select(Profile.NormalizeExe).ToArray(),
+                p.Bindings.Where(b => b.Enabled && b.Input is not null && b.Output is not null).Select(Clone).ToArray()))
             .ToArray();
         lock (_gate)
         {
-            _bindings = copy;
-            _padUsed = copy.Any(b => b.Output!.Target == OutputTarget.Xbox360);
+            _profiles = copy;
+            _profilesChanged = true;
+            RefreshActive();
         }
     }
 
-    private bool _active = true;
-
     /// <summary>
-    /// Turns output on/off. Turning it off releases everything; ticks are ignored until reactivated.
+    /// Turns output on/off. Turning it off releases everything and stops blocking; ticks are
+    /// ignored until reactivated.
     /// </summary>
     public void SetActive(bool active)
     {
@@ -60,6 +98,8 @@ public sealed class MappingEngine
         {
             _active = active;
             if (!active) ReleaseAll();
+            else RefreshActive();
+            _blocked = _active ? _blockCandidates : NoBlocks;
         }
     }
 
@@ -68,9 +108,12 @@ public sealed class MappingEngine
         lock (_gate)
         {
             if (!_active) return;
+            RefreshActive();
+
             var keys = new HashSet<int>();
             var mouse = new HashSet<MouseButton>();
             var pad = new PadState();
+            var vjoy = new Dictionary<int, VJoyState>();
             double mx = 0, my = 0;
 
             foreach (var b in _bindings)
@@ -87,6 +130,8 @@ public sealed class MappingEngine
                         case OutputTarget.Keyboard: keys.Add(o.Index); break;
                         case OutputTarget.Mouse: mouse.Add((MouseButton)o.Index); break;
                         case OutputTarget.Xbox360: pad.Buttons[o.Index] = true; break;
+                        case OutputTarget.VJoy when o.Index is >= 0 and < VJoyState.MaxButtons:
+                            VJoyFor(vjoy, o.Device).Buttons[o.Index] = true; break;
                     }
                 }
                 else
@@ -98,6 +143,10 @@ public sealed class MappingEngine
                             // Several bindings on one axis: the strongest deflection wins.
                             if (Math.Abs(v) > Math.Abs(pad.Axes[o.Index])) pad.Axes[o.Index] = v;
                             break;
+                        case OutputTarget.VJoy:
+                            var s = VJoyFor(vjoy, o.Device);
+                            if (Math.Abs(v) > Math.Abs(s.Axes[o.Index])) s.Axes[o.Index] = v;
+                            break;
                         case OutputTarget.Mouse when o.Index == (int)MouseAxis.X: mx += v; break;
                         case OutputTarget.Mouse: my += v; break;
                     }
@@ -107,10 +156,11 @@ public sealed class MappingEngine
             ApplyKeys(keys);
             ApplyMouse(mouse, mx, my);
             ApplyPad(pad);
+            ApplyVJoy(vjoy);
         }
     }
 
-    /// <summary>Releases every held key/button and centers / unplugs the virtual pad.</summary>
+    /// <summary>Releases every held key/button and centres / unplugs the virtual devices.</summary>
     public void ReleaseAll()
     {
         lock (_gate)
@@ -124,8 +174,38 @@ public sealed class MappingEngine
             }
             _lastPad.CopyFrom(new PadState());
             _padSent = false;
+            foreach (var id in _lastVJoy.Keys) _vjoy?.Release(id);
+            _lastVJoy.Clear();
             _mouseRemX = _mouseRemY = 0;
+            _blocked = NoBlocks;
         }
+    }
+
+    /// <summary>Recomputes which profiles apply to the current foreground app (cheap when nothing changed).</summary>
+    private void RefreshActive()
+    {
+        string? fg = _foreground;
+        if (!_profilesChanged && fg == _lastFg) return;
+        _lastFg = fg;
+        var activeIdx = Enumerable.Range(0, _profiles.Length).Where(i => Profile.AppliesTo(_profiles[i].Apps, fg)).ToArray();
+        var active = activeIdx.Select(i => _profiles[i]).ToArray();
+        string key = string.Join(",", activeIdx);
+        if (!_profilesChanged && key == _activeKey) return;
+        _profilesChanged = false;
+        _activeKey = key;
+
+        _bindings = active.SelectMany(p => p.Bindings).ToArray();
+        _activeNames = active.Select(p => p.Name).ToArray();
+        _padUsed = _bindings.Any(b => b.Output!.Target == OutputTarget.Xbox360);
+        var blocks = _bindings.Where(b => b.Block).Select(b => b.Input!).ToHashSet();
+        _blockCandidates = blocks.Count == 0 ? NoBlocks : blocks;
+        _blocked = _active ? _blockCandidates : NoBlocks;
+    }
+
+    private static VJoyState VJoyFor(Dictionary<int, VJoyState> map, int device)
+    {
+        if (!map.TryGetValue(device, out var s)) map[device] = s = new VJoyState();
+        return s;
     }
 
     private void ApplyKeys(HashSet<int> want)
@@ -160,6 +240,26 @@ public sealed class MappingEngine
         _pad.Update(pad);
         _lastPad.CopyFrom(pad);
         _padSent = true;
+    }
+
+    private void ApplyVJoy(Dictionary<int, VJoyState> want)
+    {
+        if (_vjoy is null) return;
+        // Devices used by the active bindings stay acquired even while all their inputs are idle.
+        foreach (var b in _bindings)
+            if (b.Output!.Target == OutputTarget.VJoy) VJoyFor(want, b.Output.Device);
+
+        foreach (var id in _lastVJoy.Keys.Except(want.Keys).ToList())
+        {
+            _vjoy.Release(id);
+            _lastVJoy.Remove(id);
+        }
+        foreach (var (id, state) in want)
+        {
+            if (_lastVJoy.TryGetValue(id, out var last) && last.Equals(state)) continue;
+            _vjoy.Update(id, state);
+            _lastVJoy[id] = state.Clone();
+        }
     }
 
     private static Binding Clone(Binding b) =>

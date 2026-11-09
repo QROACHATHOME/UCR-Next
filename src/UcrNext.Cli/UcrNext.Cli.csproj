@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RootNamespace>UcrNext.Cli</RootNamespace>
+    <AssemblyName>ucrnext</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\UcrNext.Core\UcrNext.Core.csproj" />
+    <ProjectReference Include="..\UcrNext.Devices\UcrNext.Devices.csproj" />
+  </ItemGroup>
+</Project>
