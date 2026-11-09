@@ -5,3 +5,8 @@ obj/
 *.suo
 TestResults/
 publish/
+
+# Visual Studio solution-upgrade leftovers
+Backup/
+UpgradeLog*.htm
+_UpgradeReport_Files/
