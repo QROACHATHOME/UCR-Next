@@ -45,10 +45,25 @@ public sealed class ProfileStore
         File.Move(tmp, path, overwrite: true);
     }
 
+    /// <summary>
+    /// Removes the profile from the folder. The file is moved to the "deleted" subfolder
+    /// (newest copy kept) rather than destroyed, so a mistake can be recovered by moving it back.
+    /// </summary>
     public void Delete(Profile profile)
     {
         var path = PathFor(profile);
-        if (File.Exists(path)) File.Delete(path);
+        if (!File.Exists(path)) return;
+        var bin = Path.Combine(Directory, "deleted");
+        System.IO.Directory.CreateDirectory(bin);
+        File.Move(path, Path.Combine(bin, Path.GetFileName(path)), overwrite: true);
+    }
+
+    /// <summary>The saved copy of a profile, or null if it isn't on disk.</summary>
+    public Profile? Load(Guid id)
+    {
+        var path = Path.Combine(Directory, id.ToString("N") + ".json");
+        try { return File.Exists(path) ? JsonSerializer.Deserialize<Profile>(File.ReadAllText(path), Options) : null; }
+        catch (JsonException) { return null; }
     }
 
     private string PathFor(Profile p) => Path.Combine(Directory, p.Id.ToString("N") + ".json");

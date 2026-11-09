@@ -15,6 +15,8 @@ public sealed class AppSettings
     public bool ShowTrayIcon { get; set; } = true;
     /// <summary>Closing the window keeps UCR-Next running in the background.</summary>
     public bool CloseToTray { get; set; }
+    /// <summary>"System" (follow Windows), "Light" or "Dark".</summary>
+    public string Theme { get; set; } = "System";
 
     public static string DefaultPath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "UCR-Next", "settings.json");

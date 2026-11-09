@@ -136,6 +136,8 @@ public class CommandTests
         public string Last = "";
         public void SetProfileEnabled(Profile profile, bool enabled) => profile.Enabled = enabled;
         public void ReloadProfiles() => Last = "reload";
+        public bool HasUnsavedChanges { get; set; }
+        public void SaveProfiles() { Last = "save"; HasUnsavedChanges = false; }
         public void ShowWindow() => Last = "show";
         public void HideWindow() => Last = "hide";
         public void Quit() => Last = "quit";
@@ -167,6 +169,25 @@ public class CommandTests
         var h = new Host(); var c = new CommandProcessor(h);
         c.Execute("import \"C:\\UCR v0.9\\context.xml\" --per-device");
         Assert.Equal("import C:\\UCR v0.9\\context.xml True", h.Last);
+    }
+
+    [Fact]
+    public void Quit_with_unsaved_changes_needs_save_or_discard()
+    {
+        var h = new Host { HasUnsavedChanges = true }; var c = new CommandProcessor(h);
+        Assert.StartsWith("error:", c.Execute("quit"));
+        Assert.Equal("", h.Last);
+        Assert.Contains("Unsaved changes: yes", c.Execute("status"));
+        c.Execute("quit --save");
+        Assert.Equal("quit", h.Last);
+        Assert.False(h.HasUnsavedChanges);
+
+        var h2 = new Host { HasUnsavedChanges = true }; var c2 = new CommandProcessor(h2);
+        c2.Execute("quit --discard");
+        Assert.Equal("quit", h2.Last);
+        Assert.True(h2.HasUnsavedChanges);   // not saved
+        Assert.Equal("Saved", c2.Execute("save"));
+        Assert.Equal("Nothing to save", c2.Execute("save"));
     }
 
     [Fact]

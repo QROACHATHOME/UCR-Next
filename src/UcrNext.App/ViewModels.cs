@@ -1,6 +1,8 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 using UcrNext.Core;
 using UcrNext.Devices;
@@ -20,6 +22,44 @@ public abstract class Observable : INotifyPropertyChanged
         field = value;
         Raise(name);
         return true;
+    }
+}
+
+public sealed class RelayCommand : ICommand
+{
+    private readonly Action _run;
+    private readonly Func<bool>? _can;
+    public RelayCommand(Action run, Func<bool>? can = null) { _run = run; _can = can; }
+    public event EventHandler? CanExecuteChanged
+    {
+        add => CommandManager.RequerySuggested += value;
+        remove => CommandManager.RequerySuggested -= value;
+    }
+    public bool CanExecute(object? parameter) => _can?.Invoke() ?? true;
+    public void Execute(object? parameter) => _run();
+}
+
+/// <summary>Group colours offered in the editor (and used in turn for new groups).</summary>
+public static class GroupColors
+{
+    public static readonly string[] Palette =
+    {
+        "#3B82F6", "#22C55E", "#F59E0B", "#EF4444", "#A855F7",
+        "#14B8A6", "#EC4899", "#F97316", "#64748B", "#EAB308",
+    };
+
+    public static Color Parse(string? hex)
+    {
+        try { return (Color)ColorConverter.ConvertFromString(hex ?? "#8A8A8A"); }
+        catch (FormatException) { return Color.FromRgb(0x8A, 0x8A, 0x8A); }
+    }
+
+    public static SolidColorBrush Brush(string? hex, byte alpha = 255)
+    {
+        var c = Parse(hex);
+        var b = new SolidColorBrush(Color.FromArgb(alpha, c.R, c.G, c.B));
+        b.Freeze();
+        return b;
     }
 }
 
@@ -84,7 +124,28 @@ public sealed class BindingVm : Observable
         Raise(nameof(InputText)); Raise(nameof(Name)); Raise(nameof(IsAnalogInput)); Raise(nameof(IsBlockable)); Raise(nameof(Block));
         Raise(nameof(CanUseFullRange)); Raise(nameof(ShowBlockHint));
         _changed(this);
+        Owner.RequestRebuild(); // group summaries list the devices used
     }
+
+    // ---- Group ----
+
+    /// <summary>The group this binding is shown in (the "not in a group" entry when none).</summary>
+    public GroupVm Group
+    {
+        get => Owner.GroupOf(Model);
+        set
+        {
+            var id = value?.Model?.Id;
+            if (Model.GroupId == id) return;
+            Model.GroupId = id;
+            _changed(this);
+            Owner.RequestRebuild(); // deferred: moving the row while its combo box is still handling the click
+        }
+    }
+
+    public Brush GroupBrush => Group.Brush;
+
+    internal void NotifyGroup() { Raise(nameof(Group)); Raise(nameof(GroupBrush)); }
 
     public bool IsAnalogInput => Model.Input?.Kind is InputKind.Axis or InputKind.Trigger;
 
@@ -190,20 +251,242 @@ public sealed class BindingVm : Observable
     }
 }
 
+/// <summary>A group of bindings as shown in the editor; <see cref="Model"/> is null for "not in a group".</summary>
+public sealed class GroupVm : Observable
+{
+    private readonly ProfileVm _owner;
+    private bool _ungroupedExpanded = true;
+    private bool _showHeader = true;
+    private string _summary = "";
+
+    public GroupVm(ProfileVm owner, BindingGroup? model) { _owner = owner; Model = model; }
+
+    public BindingGroup? Model { get; }
+    public ProfileVm Owner => _owner;
+    public bool IsUngrouped => Model is null;
+    public bool IsGroup => Model is not null;
+    public ObservableCollection<BindingVm> Bindings { get; } = new();
+
+    public string Name
+    {
+        get => Model?.Name ?? "Not in a group";
+        set
+        {
+            if (Model is null || Model.Name == value) return;
+            Model.Name = value;
+            Raise();
+            foreach (var b in Bindings) b.NotifyGroup();
+            _owner.Changed();
+        }
+    }
+
+    public string Color
+    {
+        get => Model?.Color ?? "#8A8A8A";
+        set
+        {
+            if (Model is null || Model.Color == value) return;
+            Model.Color = value;
+            Raise(); Raise(nameof(Brush)); Raise(nameof(TintBrush));
+            foreach (var b in Bindings) b.NotifyGroup();
+            _owner.Changed();
+            _owner.RequestRebuild(); // the profile list shows the group colours
+        }
+    }
+
+    public Brush Brush => GroupColors.Brush(Color);
+    /// <summary>Faint version of the colour for the group's header background.</summary>
+    public Brush TintBrush => GroupColors.Brush(Color, 0x26);
+
+    /// <summary>Folding a group isn't an edit: it is remembered but doesn't count as an unsaved change.</summary>
+    public bool IsExpanded
+    {
+        get => Model is null ? _ungroupedExpanded : !Model.Collapsed;
+        set
+        {
+            if (IsExpanded == value) return;
+            if (Model is null) _ungroupedExpanded = value; else Model.Collapsed = !value;
+            Raise();
+        }
+    }
+
+    /// <summary>The "not in a group" header is hidden while the profile has no groups at all.</summary>
+    public bool ShowHeader { get => _showHeader; set => Set(ref _showHeader, value); }
+
+    /// <summary>"3 bindings · Xbox controller 1, Keyboard"</summary>
+    public string Summary { get => _summary; private set => Set(ref _summary, value); }
+
+    internal void RefreshSummary()
+    {
+        var devices = Bindings.Select(b => b.Model.Input?.DeviceId).Where(d => !string.IsNullOrEmpty(d))
+            .Distinct().Select(d => ProfileVm.DeviceName(d!)).Distinct().ToList();
+        Summary = $"{Bindings.Count} binding{(Bindings.Count == 1 ? "" : "s")}" +
+                  (devices.Count == 0 ? "" : " · " + string.Join(", ", devices));
+    }
+
+    public override string ToString() => Name;
+}
+
 public sealed class ProfileVm : Observable
 {
     private readonly Action<ProfileVm> _changed;
+    private readonly Action<ProfileVm> _enabledChanged;
+    private readonly GroupVm _ungrouped;
+    private readonly Dictionary<Guid, GroupVm> _groupVms = new();
+    private bool _rebuildPending;
+    private bool _isDirty;
 
-    public ProfileVm(Profile model, Action<ProfileVm> changed)
+    /// <summary>Turns a device id into a readable name (set by the main view model, which knows the devices).</summary>
+    public static Func<string, string> DeviceName { get; set; } = id => id;
+
+    public ProfileVm(Profile model, Action<ProfileVm> changed, Action<ProfileVm> enabledChanged)
     {
-        Model = model; _changed = changed;
-        foreach (var b in model.Bindings) Bindings.Add(new BindingVm(b, this, bv => _changed(this)));
+        Model = model; _changed = changed; _enabledChanged = enabledChanged;
+        _ungrouped = new GroupVm(this, null);
+        foreach (var b in model.Bindings) Bindings.Add(NewBindingVm(b));
         foreach (var d in model.SkipIfDevicesPresent) SkipDevices.Add(d);
+        RebuildGroups();
     }
 
     public Profile Model { get; }
+    /// <summary>All bindings, in profile order.</summary>
     public ObservableCollection<BindingVm> Bindings { get; } = new();
+    /// <summary>What the editor shows: the groups in order, then the bindings not in a group.</summary>
+    public ObservableCollection<GroupVm> Groups { get; } = new();
+    /// <summary>Choices for a binding's group drop-down ("not in a group" first).</summary>
+    public ObservableCollection<GroupVm> GroupChoices { get; } = new();
     public ObservableCollection<DeviceMatch> SkipDevices { get; } = new();
+
+    /// <summary>Has edits that aren't saved yet.</summary>
+    public bool IsDirty { get => _isDirty; set => Set(ref _isDirty, value); }
+
+    internal void Changed() => _changed(this);
+
+    private BindingVm NewBindingVm(Binding b) => new(b, this, _ => _changed(this));
+
+    // ---- Groups ----
+
+    public GroupVm GroupOf(Binding b) =>
+        b.GroupId is { } id && _groupVms.TryGetValue(id, out var g) ? g : _ungrouped;
+
+    /// <summary>Re-sorts the bindings into their groups (on the next dispatcher turn).</summary>
+    public void RequestRebuild()
+    {
+        if (_rebuildPending) return;
+        _rebuildPending = true;
+        Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background, () => { _rebuildPending = false; RebuildGroups(); });
+    }
+
+    public void RebuildGroups()
+    {
+        foreach (var stale in _groupVms.Keys.Where(id => Model.Groups.All(g => g.Id != id)).ToList()) _groupVms.Remove(stale);
+        var groups = Model.Groups.Select(g => _groupVms.TryGetValue(g.Id, out var vm) ? vm : _groupVms[g.Id] = new GroupVm(this, g)).ToList();
+
+        var members = groups.Append(_ungrouped).ToDictionary(g => g, _ => new List<BindingVm>());
+        foreach (var b in Bindings) members[GroupOf(b.Model)].Add(b);
+
+        _ungrouped.ShowHeader = groups.Count > 0;
+        var shown = new List<GroupVm>(groups);
+        if (members[_ungrouped].Count > 0 || groups.Count == 0) shown.Add(_ungrouped);
+
+        Sync(Groups, shown);
+        Sync(GroupChoices, groups.Prepend(_ungrouped).ToList());
+        foreach (var (g, list) in members) { Sync(g.Bindings, list); g.RefreshSummary(); }
+        foreach (var b in Bindings) b.NotifyGroup();
+        Raise(nameof(Summary)); Raise(nameof(GroupBrushes)); Raise(nameof(IsEmpty));
+    }
+
+    /// <summary>Makes <paramref name="target"/> equal to <paramref name="wanted"/> with as few changes as possible.</summary>
+    private static void Sync<T>(ObservableCollection<T> target, IList<T> wanted) where T : class
+    {
+        for (int i = 0; i < wanted.Count; i++)
+        {
+            if (i < target.Count && ReferenceEquals(target[i], wanted[i])) continue;
+            int j = target.IndexOf(wanted[i]);
+            if (j > i) target.Move(j, i); else target.Insert(i, wanted[i]);
+        }
+        while (target.Count > wanted.Count) target.RemoveAt(target.Count - 1);
+    }
+
+    /// <summary>The first palette colour no group uses yet (cycling once all are used).</summary>
+    private string NextColor() =>
+        GroupColors.Palette.FirstOrDefault(c => Model.Groups.All(g => !string.Equals(g.Color, c, StringComparison.OrdinalIgnoreCase)))
+        ?? GroupColors.Palette[Model.Groups.Count % GroupColors.Palette.Length];
+
+    public GroupVm AddGroup(string? name = null, string? color = null)
+    {
+        var g = new BindingGroup
+        {
+            Name = name ?? $"Group {Model.Groups.Count + 1}",
+            Color = color ?? NextColor(),
+        };
+        Model.Groups.Add(g);
+        RebuildGroups();
+        _changed(this);
+        return _groupVms[g.Id];
+    }
+
+    /// <summary>Removes the group; its bindings stay, outside any group.</summary>
+    public void RemoveGroup(GroupVm g)
+    {
+        if (g.Model is null) return;
+        Model.Groups.Remove(g.Model);
+        foreach (var b in Model.Bindings.Where(b => b.GroupId == g.Model.Id)) b.GroupId = null;
+        RebuildGroups();
+        _changed(this);
+    }
+
+    public void MoveGroup(GroupVm g, int delta)
+    {
+        if (g.Model is null) return;
+        int i = Model.Groups.IndexOf(g.Model), j = i + delta;
+        if (i < 0 || j < 0 || j >= Model.Groups.Count) return;
+        Model.Groups.RemoveAt(i);
+        Model.Groups.Insert(j, g.Model);
+        RebuildGroups();
+        _changed(this);
+    }
+
+    /// <summary>
+    /// Puts every binding that isn't in a group into a group per input device ("Xbox controller 1",
+    /// "Keyboard"…), reusing a group with that name if there is one. Returns how many were grouped.
+    /// </summary>
+    public int GroupByDevice()
+    {
+        int n = 0;
+        foreach (var b in Model.Bindings.Where(b => GroupOf(b).IsUngrouped && b.Input is not null))
+        {
+            var name = DeviceName(b.Input!.DeviceId);
+            var g = Model.Groups.FirstOrDefault(x => string.Equals(x.Name, name, StringComparison.CurrentCultureIgnoreCase));
+            if (g is null)
+            {
+                g = new BindingGroup { Name = name, Color = NextColor() };
+                Model.Groups.Add(g);
+            }
+            b.GroupId = g.Id;
+            n++;
+        }
+        if (n == 0) return 0;
+        RebuildGroups();
+        _changed(this);
+        return n;
+    }
+
+    public bool IsEmpty => Bindings.Count == 0;
+
+    public string Summary
+    {
+        get
+        {
+            var s = $"{Bindings.Count} binding{(Bindings.Count == 1 ? "" : "s")}";
+            return Model.Groups.Count == 0 ? s : s + $" · {Model.Groups.Count} group{(Model.Groups.Count == 1 ? "" : "s")}";
+        }
+    }
+
+    /// <summary>Colours of the profile's groups, for the dots in the profile list.</summary>
+    public IReadOnlyList<Brush> GroupBrushes => Model.Groups.Select(g => (Brush)GroupColors.Brush(g.Color)).ToList();
+
+    // ---- Profile settings ----
 
     /// <summary>One game per line.</summary>
     public string GamesText
@@ -247,10 +530,11 @@ public sealed class ProfileVm : Observable
         set { if (Model.Name == value) return; Model.Name = value; Raise(); _changed(this); }
     }
 
+    /// <summary>Switching a profile on/off takes effect and is saved at once (it isn't an edit to undo).</summary>
     public bool Enabled
     {
         get => Model.Enabled;
-        set { if (Model.Enabled == value) return; Model.Enabled = value; Raise(); _changed(this); }
+        set { if (Model.Enabled == value) return; Model.Enabled = value; Raise(); _enabledChanged(this); }
     }
 
     /// <summary>Comma-separated program names; empty = active in every program.</summary>
@@ -275,20 +559,39 @@ public sealed class ProfileVm : Observable
         _changed(this);
     }
 
-    public BindingVm AddBinding()
+    // ---- Bindings ----
+
+    public BindingVm AddBinding(GroupVm? group = null)
     {
-        var b = new Binding();
+        var b = new Binding { GroupId = group?.Model?.Id };
         Model.Bindings.Add(b);
-        var vm = new BindingVm(b, this, bv => _changed(this));
+        var vm = NewBindingVm(b);
         Bindings.Add(vm);
+        RebuildGroups();
         _changed(this);
         return vm;
+    }
+
+    /// <summary>Shows bindings that were already added to <see cref="Model"/> (paste, duplicate).</summary>
+    public void ShowAddedBindings(IEnumerable<Binding> added)
+    {
+        foreach (var b in added) Bindings.Add(NewBindingVm(b));
+        RebuildGroups();
+        _changed(this);
+    }
+
+    public void DuplicateBinding(BindingVm vm)
+    {
+        var copies = ProfileCopy.PasteBindings(Model, new[] { vm.Model }, Model.Groups);
+        foreach (var c in copies) c.Name = vm.Model.Name + " (copy)";
+        ShowAddedBindings(copies);
     }
 
     public void RemoveBinding(BindingVm vm)
     {
         Model.Bindings.Remove(vm.Model);
         Bindings.Remove(vm);
+        RebuildGroups();
         _changed(this);
     }
 }
@@ -296,23 +599,34 @@ public sealed class ProfileVm : Observable
 public sealed class MainViewModel : Observable
 {
     private readonly AppServices _s;
-    private readonly HashSet<ProfileVm> _dirty = new();
-    private readonly DispatcherTimer _saveTimer;
+    private readonly DispatcherTimer _changeTimer;
     private readonly DispatcherTimer _refreshTimer;
+    private readonly EditHistory _history = new();
+    /// <summary>Saved content (<see cref="ProfileCopy.EditKey"/>) of each profile on disk.</summary>
+    private readonly Dictionary<Guid, string> _saved = new();
     private ProfileVm? _selected;
     private string _status = "";
     private string _liveText = "";
+    private bool _hasUnsaved;
     private Autostart.Mode _autostart;
 
     public MainViewModel(AppServices services)
     {
         _s = services;
         OutputOption.Initialize(_s.VJoy.Devices);
+        ProfileVm.DeviceName = DeviceLabel;
 
-        _saveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
-        _saveTimer.Tick += (_, _) => Flush();
+        // Edits take effect (and become an undo step) shortly after the last change, so typing
+        // or dragging a slider is one step. Nothing is written to disk until Save.
+        _changeTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
+        _changeTimer.Tick += (_, _) => CommitChange();
 
-        LoadProfiles();
+        SaveCommand = new RelayCommand(Save, () => HasUnsavedChanges);
+        RevertCommand = new RelayCommand(Revert, () => HasUnsavedChanges);
+        UndoCommand = new RelayCommand(Undo, () => CanUndo);
+        RedoCommand = new RelayCommand(Redo, () => CanRedo);
+
+        LoadFromDisk(resetHistory: true);
 
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _refreshTimer.Tick += (_, _) => Refresh();
@@ -343,7 +657,7 @@ public sealed class MainViewModel : Observable
         set
         {
             if (value == _s.Runner.IsMapping) return;
-            Flush();
+            ApplyPending();
             _s.Runner.IsMapping = value;
             Raise();
             Raise(nameof(MappingButtonText));
@@ -352,7 +666,170 @@ public sealed class MainViewModel : Observable
         }
     }
 
-    public string MappingButtonText => IsMapping ? "■ Stop mapping" : "▶ Start mapping";
+    public string MappingButtonText => IsMapping ? "Mapping ON" : "Start mapping";
+
+    // ---- Save / revert / undo ----
+
+    public ICommand SaveCommand { get; }
+    public ICommand RevertCommand { get; }
+    public ICommand UndoCommand { get; }
+    public ICommand RedoCommand { get; }
+
+    public bool HasUnsavedChanges
+    {
+        get => _hasUnsaved;
+        private set { if (Set(ref _hasUnsaved, value)) Raise(nameof(WindowTitle)); }
+    }
+
+    public string WindowTitle => "UCR-Next — Universal Control Remapper" + (HasUnsavedChanges ? "  •  unsaved changes" : "");
+
+    public bool CanUndo => _history.CanUndo || _changeTimer.IsEnabled;
+    public bool CanRedo => _history.CanRedo && !_changeTimer.IsEnabled;
+
+    private IEnumerable<Profile> Models => Profiles.Select(p => p.Model);
+    private string HistoryKey() => string.Join("\n", Models.Select(ProfileCopy.EditKey));
+
+    private ProfileVm NewVm(Profile p) => new(p, OnProfileChanged, OnEnabledChanged);
+
+    private void OnProfileChanged(ProfileVm vm)
+    {
+        _changeTimer.Stop();
+        _changeTimer.Start();
+        HasUnsavedChanges = true; // confirmed (or cleared, if undone by hand) when the change is committed
+        RaiseHistory();
+    }
+
+    /// <summary>Hands pending edits to the engine and records them as an undo step.</summary>
+    private void CommitChange()
+    {
+        _changeTimer.Stop();
+        PushToEngine();
+        _history.Record(ProfileCopy.SerializeAll(Models), HistoryKey());
+        UpdateDirty();
+        RaiseHistory();
+    }
+
+    /// <summary>Applies edits that are still waiting for the short typing delay.</summary>
+    public void ApplyPending()
+    {
+        if (_changeTimer.IsEnabled) CommitChange();
+    }
+
+    private void RaiseHistory()
+    {
+        Raise(nameof(CanUndo)); Raise(nameof(CanRedo));
+        CommandManager.InvalidateRequerySuggested();
+    }
+
+    private void UpdateDirty()
+    {
+        bool any = false;
+        foreach (var p in Profiles)
+        {
+            bool dirty = !_saved.TryGetValue(p.Model.Id, out var key) || key != ProfileCopy.EditKey(p.Model);
+            p.IsDirty = dirty;
+            any |= dirty;
+        }
+        any |= _saved.Keys.Any(id => Profiles.All(p => p.Model.Id != id)); // deleted, not saved yet
+        HasUnsavedChanges = any;
+    }
+
+    /// <summary>Writes changed profiles to disk; profiles deleted in the editor go to the "deleted" folder.</summary>
+    public void Save()
+    {
+        ApplyPending();
+        int n = 0;
+        foreach (var p in Profiles.Where(p => p.IsDirty))
+        {
+            _s.Store.Save(p.Model);
+            _saved[p.Model.Id] = ProfileCopy.EditKey(p.Model);
+            n++;
+        }
+        foreach (var id in _saved.Keys.Where(id => Profiles.All(p => p.Model.Id != id)).ToList())
+        {
+            _s.Store.Delete(new Profile { Id = id });
+            _saved.Remove(id);
+            n++;
+        }
+        UpdateDirty();
+        RaiseHistory();
+        Status = n == 0 ? "Nothing to save" : $"Saved at {DateTime.Now:T}" + (IsMapping ? $" — {_s.Engine.ActiveBindingCount} active bindings" : "");
+    }
+
+    /// <summary>Throws away unsaved edits and goes back to the profiles on disk (Undo brings them back).</summary>
+    public void Revert()
+    {
+        ApplyPending();
+        LoadFromDisk(resetHistory: false);
+        Status = "Back to the saved profiles — Undo (Ctrl+Z) brings your changes back";
+    }
+
+    public void Undo()
+    {
+        ApplyPending();
+        if (_history.Undo() is { } state) { Restore(state); Status = "Undone"; }
+    }
+
+    public void Redo()
+    {
+        ApplyPending();
+        if (_history.Redo() is { } state) { Restore(state); Status = "Redone"; }
+    }
+
+    private void Restore(string state)
+    {
+        // Profile on/off isn't part of undo: keep what is switched on now.
+        var enabled = Profiles.ToDictionary(p => p.Model.Id, p => p.Model.Enabled);
+        var list = ProfileCopy.DeserializeAll(state);
+        foreach (var p in list) if (enabled.TryGetValue(p.Id, out var e)) p.Enabled = e;
+        SetProfiles(list, _selected?.Model.Id);
+        PushToEngine();
+        UpdateDirty();
+        RaiseHistory();
+    }
+
+    private void SetProfiles(IEnumerable<Profile> list, Guid? keepSelected)
+    {
+        int index = _selected is null ? 0 : Math.Max(0, Profiles.IndexOf(_selected));
+        Profiles.Clear();
+        foreach (var p in list) Profiles.Add(NewVm(p));
+        Selected = Profiles.FirstOrDefault(p => p.Model.Id == keepSelected)
+                   ?? (Profiles.Count == 0 ? null : Profiles[Math.Min(index, Profiles.Count - 1)]);
+    }
+
+    private void LoadFromDisk(bool resetHistory)
+    {
+        var list = _s.Store.LoadAll();
+        if (list.Count == 0)
+        {
+            var d = new Profile { Name = "Default" };
+            _s.Store.Save(d);
+            list.Add(d);
+        }
+        _saved.Clear();
+        foreach (var p in list) _saved[p.Id] = ProfileCopy.EditKey(p);
+        SetProfiles(list, _selected?.Model.Id);
+        PushToEngine();
+        if (resetHistory) _history.Reset(ProfileCopy.SerializeAll(Models), HistoryKey());
+        else _history.Record(ProfileCopy.SerializeAll(Models), HistoryKey());
+        UpdateDirty();
+        RaiseHistory();
+    }
+
+    /// <summary>
+    /// Switching a profile on or off applies at once and is written to the saved file straight
+    /// away (only that flag, so other unsaved edits stay unsaved). Used by the checkbox and the CLI.
+    /// </summary>
+    private void OnEnabledChanged(ProfileVm vm)
+    {
+        PushToEngine();
+        if (_s.Store.Load(vm.Model.Id) is { } saved)
+        {
+            saved.Enabled = vm.Model.Enabled;
+            _s.Store.Save(saved);
+        }
+        if (!_changeTimer.IsEnabled) _history.Record(ProfileCopy.SerializeAll(Models), HistoryKey());
+    }
 
     // ---- Settings ----
 
@@ -386,6 +863,22 @@ public sealed class MainViewModel : Observable
         }
     }
 
+    public string Theme
+    {
+        get => _s.Settings.Theme;
+        set
+        {
+            _s.Settings.Theme = value;
+            _s.SaveSettings();
+            Theming.Apply(value);
+            Raise(); Raise(nameof(ThemeSystem)); Raise(nameof(ThemeLight)); Raise(nameof(ThemeDark));
+        }
+    }
+
+    public bool ThemeSystem => Theming.Normalize(Theme) == "System";
+    public bool ThemeLight => Theming.Normalize(Theme) == "Light";
+    public bool ThemeDark => Theming.Normalize(Theme) == "Dark";
+
     public Autostart.Mode AutostartMode => _autostart;
     public bool AutostartOff => _autostart == Autostart.Mode.Off;
     public bool AutostartLogon => _autostart == Autostart.Mode.Logon;
@@ -401,75 +894,130 @@ public sealed class MainViewModel : Observable
 
     // ---- Profiles ----
 
-    private void LoadProfiles()
-    {
-        Guid? keep = _selected?.Model.Id;
-        Profiles.Clear();
-        foreach (var p in _s.Store.LoadAll()) Profiles.Add(new ProfileVm(p, OnProfileChanged));
-        if (Profiles.Count == 0) AddProfile("Default");
-        Selected = Profiles.FirstOrDefault(p => p.Model.Id == keep) ?? Profiles[0];
-        PushToEngine();
-    }
-
-    /// <summary>Imports a UCR context.xml into the profile folder and reloads.</summary>
+    /// <summary>Imports a UCR context.xml into the profile folder (saved at once) and shows the profiles.</summary>
     public UcrImportResult ImportUcr(string path, bool perDevice)
     {
-        Flush();
+        ApplyPending();
         var mode = !perDevice ? UcrImporter.PerDevice.Any
             : InterceptionRunning ? UcrImporter.PerDevice.Interception : UcrImporter.PerDevice.RawInput;
         var result = new UcrImporter(KeyMapping.ScanToVk, mode).ImportFile(path);
         result.SaveTo(_s.Store);
-        LoadProfiles();
+        foreach (var imported in result.Profiles)
+        {
+            var p = _s.Store.Load(imported.Id) ?? imported;
+            var vm = NewVm(p);
+            var old = Profiles.FirstOrDefault(x => x.Model.Id == p.Id);
+            if (old is null) Profiles.Add(vm);
+            else
+            {
+                Profiles[Profiles.IndexOf(old)] = vm;
+                if (_selected == old) Selected = vm;
+            }
+            _saved[p.Id] = ProfileCopy.EditKey(p);
+        }
+        CommitChange();
         Status = $"Imported {result.Profiles.Count} UCR profile(s) — they start disabled; tick the ones you want";
         return result;
     }
 
-    /// <summary>Re-reads every profile from disk (unsaved edits are saved first).</summary>
+    /// <summary>Re-reads every profile from disk (CLI "reload"; unsaved edits are dropped but can be undone).</summary>
     public void Reload()
     {
-        Flush();
-        LoadProfiles();
+        Revert();
         Status = $"Reloaded {Profiles.Count} profile(s)";
     }
 
-    public ProfileVm AddProfile(string name = "New profile")
+    public ProfileVm AddProfile(string name = "New profile") => InsertProfile(new Profile { Name = name }, Profiles.Count);
+
+    private ProfileVm InsertProfile(Profile p, int index)
     {
-        var vm = new ProfileVm(new Profile { Name = name }, OnProfileChanged);
-        Profiles.Add(vm);
-        OnProfileChanged(vm);
+        var vm = NewVm(p);
+        Profiles.Insert(Math.Clamp(index, 0, Profiles.Count), vm);
         Selected = vm;
+        CommitChange();
         return vm;
     }
 
+    /// <summary>A copy right below the original; it starts switched off so it doesn't double the mapping.</summary>
+    public ProfileVm DuplicateProfile(ProfileVm vm)
+    {
+        ApplyPending();
+        var copy = ProfileCopy.CloneAsNew(vm.Model, ProfileCopy.CopyName(vm.Name, Profiles.Select(p => p.Name)));
+        copy.Enabled = false;
+        var added = InsertProfile(copy, Profiles.IndexOf(vm) + 1);
+        Status = $"Duplicated \"{vm.Name}\" — the copy starts switched off";
+        return added;
+    }
+
+    /// <summary>Removes the profile from the editor; the file is moved to the "deleted" folder when you save.</summary>
     public void DeleteProfile(ProfileVm vm)
     {
-        _dirty.Remove(vm);
+        ApplyPending();
+        int i = Profiles.IndexOf(vm);
         Profiles.Remove(vm);
-        _s.Store.Delete(vm.Model);
-        Selected = Profiles.FirstOrDefault();
-        PushToEngine();
+        Selected = Profiles.Count == 0 ? null : Profiles[Math.Min(i, Profiles.Count - 1)];
+        CommitChange();
+        Status = $"Deleted \"{vm.Name}\" — Undo (Ctrl+Z) brings it back; Save makes it final";
     }
 
-    private void OnProfileChanged(ProfileVm vm)
+    public string ProfileText(ProfileVm vm)
     {
-        _dirty.Add(vm);
-        _saveTimer.Stop();
-        _saveTimer.Start();
+        ApplyPending();
+        return ProfileCopy.ProfileToText(vm.Model);
     }
 
-    /// <summary>Saves changed profiles and hands the new bindings to the engine.</summary>
-    public void Flush()
+    public string BindingsText(IEnumerable<BindingVm> bindings)
     {
-        _saveTimer.Stop();
-        if (_dirty.Count == 0) return;
-        foreach (var p in _dirty) _s.Store.Save(p.Model);
-        _dirty.Clear();
-        PushToEngine();
-        Status = $"Saved at {DateTime.Now:T}" + (IsMapping ? $" — {_s.Engine.ActiveBindingCount} active bindings" : "");
-        Refresh();
+        ApplyPending();
+        var list = bindings.ToList();
+        return ProfileCopy.BindingsToText(list.Select(b => b.Model), list.Count == 0 ? Array.Empty<BindingGroup>() : list[0].Owner.Model.Groups);
     }
 
-    private void PushToEngine() => _s.Engine.SetProfiles(Profiles.Select(p => p.Model));
+    /// <summary>
+    /// Pastes clipboard/file text: a profile becomes a new profile (switched off); bindings are
+    /// added to the selected profile (into <paramref name="intoGroup"/> if given). Returns a status line.
+    /// </summary>
+    public string Paste(string? text, GroupVm? intoGroup = null)
+    {
+        ApplyPending();
+        if (!ProfileCopy.TryParse(text, out var profile, out var bindings, out var groups))
+            return "Nothing to paste: copy a profile or bindings in UCR-Next first.";
+        if (profile is not null)
+        {
+            var name = Profiles.Any(p => string.Equals(p.Name, profile.Name, StringComparison.CurrentCultureIgnoreCase))
+                ? ProfileCopy.CopyName(profile.Name, Profiles.Select(p => p.Name)) : profile.Name;
+            var copy = ProfileCopy.CloneAsNew(profile, name);
+            copy.Enabled = false;
+            int at = _selected is null ? Profiles.Count : Profiles.IndexOf(_selected) + 1;
+            InsertProfile(copy, at);
+            return $"Pasted profile \"{name}\" — it starts switched off";
+        }
+        if (_selected is not { } target) return "Select a profile to paste the bindings into.";
+        var added = ProfileCopy.PasteBindings(target.Model, bindings!, groups!, intoGroup?.Model?.Id);
+        target.ShowAddedBindings(added);
+        return $"Pasted {added.Count} binding(s) into \"{target.Name}\"";
+    }
+
+    public void GroupByDevice(ProfileVm p)
+    {
+        int n = p.GroupByDevice();
+        Status = n == 0 ? "Every bound binding is already in a group" : $"Grouped {n} binding(s) by controller";
+    }
+
+    /// <summary>"xinput:0" → "Xbox controller 1", "dinput:…" → the stick's name when it is connected.</summary>
+    private string DeviceLabel(string deviceId)
+    {
+        var d = Devices.FirstOrDefault(x => string.Equals(x.DeviceId, deviceId, StringComparison.OrdinalIgnoreCase));
+        if (d is not null && !string.IsNullOrWhiteSpace(d.Name)) return d.Name;
+        if (deviceId == KeyboardMouseHookProvider.KeyboardId) return "Keyboard";
+        if (deviceId == KeyboardMouseHookProvider.MouseId) return "Mouse";
+        if (deviceId.StartsWith("xinput:") && int.TryParse(deviceId.AsSpan(7), out var slot)) return $"Xbox controller {slot + 1}";
+        if (deviceId.StartsWith(RawInputProvider.KeyboardPrefix) || deviceId.StartsWith(InterceptionProvider.KeyboardPrefix)) return "Keyboard " + deviceId[(deviceId.IndexOf(':') + 1)..];
+        if (deviceId.StartsWith(RawInputProvider.MousePrefix) || deviceId.StartsWith(InterceptionProvider.MousePrefix)) return "Mouse " + deviceId[(deviceId.IndexOf(':') + 1)..];
+        return deviceId;
+    }
+
+    private void PushToEngine() => _s.Engine.SetProfiles(Models);
 
     private void Refresh()
     {
@@ -481,7 +1029,7 @@ public sealed class MainViewModel : Observable
         }
         var active = _s.Engine.ActiveProfileNames;
         var skipped = _s.Engine.SkippedProfileNames;
-        LiveText = $"Active profiles: {(active.Count == 0 ? "none" : string.Join(", ", active))}" +
+        LiveText = $"Active: {(active.Count == 0 ? "none" : string.Join(", ", active))}" +
                    (skipped.Count == 0 ? "" : $"   ·   Skipped (device connected): {string.Join(", ", skipped)}") +
                    $"   ·   Foreground: {_s.Engine.ForegroundApp ?? "-"}";
         Raise(nameof(PadStatus));

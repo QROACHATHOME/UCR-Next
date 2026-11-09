@@ -598,7 +598,7 @@ public sealed class UcrImportResult
 
     /// <summary>
     /// Saves the imported profiles. Re-importing the same UCR profile (same GUID) replaces its
-    /// bindings but keeps what was added in UCR-Next: games, programs, device rules, enabled state.
+    /// bindings but keeps what was added in UCR-Next: games, programs, device rules, groups, enabled state.
     /// </summary>
     public void SaveTo(ProfileStore store)
     {
@@ -611,6 +611,10 @@ public sealed class UcrImportResult
                 p.Applications = old.Applications;
                 p.Games = old.Games;
                 p.SkipIfDevicesPresent = old.SkipIfDevicesPresent;
+                // Keep the user's groups: a re-imported binding with the same name and input stays in its group.
+                p.Groups = old.Groups;
+                foreach (var b in p.Bindings)
+                    b.GroupId = old.Bindings.FirstOrDefault(o => o.Name == b.Name && Equals(o.Input, b.Input))?.GroupId;
             }
             store.Save(p);
         }

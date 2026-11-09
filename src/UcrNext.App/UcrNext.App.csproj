@@ -19,4 +19,7 @@
     <!-- Builds ucrnext.exe (the CLI) into the same output folder as UCR-Next.exe. -->
     <ProjectReference Include="..\UcrNext.Cli\UcrNext.Cli.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="WPF-UI" Version="4.3.0" />
+  </ItemGroup>
 </Project>

@@ -10,6 +10,9 @@ public interface IControlHost
     IReadOnlyList<Profile> Profiles { get; }
     void SetProfileEnabled(Profile profile, bool enabled);
     void ReloadProfiles();
+    /// <summary>Edits made in the window that aren't saved yet.</summary>
+    bool HasUnsavedChanges { get; }
+    void SaveProfiles();
     void ShowWindow();
     void HideWindow();
     void Quit();
@@ -34,9 +37,10 @@ public sealed class CommandProcessor
         "  games                  list games and the profiles they use\n" +
         "  game <game> [--start]  enable only the profile(s) listed for this game\n" +
         "  import <context.xml> [--per-device]   import UCR profiles\n" +
-        "  reload                 reload profiles from disk\n" +
+        "  save                   save edits made in the window\n" +
+        "  reload                 reload profiles from disk (drops unsaved edits)\n" +
         "  show | hide            show or hide the window\n" +
-        "  quit                   exit UCR-Next\n" +
+        "  quit [--save|--discard]  exit UCR-Next (with unsaved edits, say what to do with them)\n" +
         "Profile names are case-insensitive; a unique prefix is enough. Quote names with spaces.";
 
     private readonly IControlHost _host;
@@ -101,6 +105,10 @@ public sealed class CommandProcessor
                 if (string.IsNullOrWhiteSpace(path)) return "error: path to UCR context.xml required";
                 return _host.ImportUcr(path, perDevice);
             }
+            case "save":
+                if (!_host.HasUnsavedChanges) return "Nothing to save";
+                _host.SaveProfiles();
+                return "Saved";
             case "reload":
                 _host.ReloadProfiles();
                 return $"Reloaded {_host.Profiles.Count} profile(s)";
@@ -111,8 +119,15 @@ public sealed class CommandProcessor
                 _host.HideWindow();
                 return "Window hidden";
             case "quit": case "exit":
+            {
+                bool save = args.Skip(1).Any(a => a.Equals("--save", StringComparison.OrdinalIgnoreCase));
+                bool discard = args.Skip(1).Any(a => a.Equals("--discard", StringComparison.OrdinalIgnoreCase));
+                if (_host.HasUnsavedChanges && !save && !discard)
+                    return "error: UCR-Next has unsaved changes. Save or revert them in the window, or run 'quit --save' or 'quit --discard'.";
+                if (save && _host.HasUnsavedChanges) _host.SaveProfiles();
                 _host.Quit();
                 return "UCR-Next is exiting";
+            }
             default:
                 return $"error: unknown command \"{args[0]}\"\n\n{Help}";
         }
@@ -122,6 +137,7 @@ public sealed class CommandProcessor
     {
         var sb = new StringBuilder();
         sb.AppendLine("Mapping: " + (_host.IsMapping ? "ON" : "OFF"));
+        if (_host.HasUnsavedChanges) sb.AppendLine("Unsaved changes: yes (save them in the window or with 'ucrnext save')");
         var active = _host.ActiveProfileNames;
         sb.AppendLine("Active profiles: " + (active.Count == 0 ? "(none)" : string.Join(", ", active)));
         foreach (var l in _host.StatusLines()) sb.AppendLine(l);

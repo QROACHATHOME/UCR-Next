@@ -54,6 +54,7 @@ public sealed class SettingsDialog : Window
 
     public SettingsDialog(BindingVm binding)
     {
+        Theming.Prepare(this);
         Title = $"Settings — {binding.Name}";
         Width = 520;
         SizeToContent = SizeToContent.Height;
@@ -84,8 +85,9 @@ public sealed class SettingsDialog : Window
 
             if (Help.TryGetValue(name, out var help))
             {
-                var hint = new TextBlock { Text = help, Foreground = System.Windows.Media.Brushes.Gray, FontSize = 11,
+                var hint = new TextBlock { Text = help, FontSize = 11,
                     TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
+                hint.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
                 Grid.SetRow(hint, row); Grid.SetColumn(hint, 2);
                 grid.Children.Add(hint);
             }

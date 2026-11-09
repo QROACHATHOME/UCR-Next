@@ -47,6 +47,7 @@ public partial class App : Application, IControlHost
         }
 
         _services = new AppServices(profileDir, AppSettings.DefaultPath);
+        Theming.Apply(_services.Settings.Theme);
         _vm = new MainViewModel(_services);
         _services.Hooks.PanicPressed += () => Dispatcher.InvokeAsync(() =>
         {
@@ -65,7 +66,7 @@ public partial class App : Application, IControlHost
     private void CreateTray()
     {
         if (_tray is not null || _vm is null) return;
-        _tray = new TrayIcon(_vm, ShowWindow, Quit);
+        _tray = new TrayIcon(_vm, ShowWindow, RequestQuit);
     }
 
     /// <summary>Called from the settings menu when "Show tray icon" changes.</summary>
@@ -93,11 +94,14 @@ public partial class App : Application, IControlHost
     public void SetProfileEnabled(Profile profile, bool enabled)
     {
         var vm = _vm!.Profiles.FirstOrDefault(p => ReferenceEquals(p.Model, profile));
-        if (vm is not null) vm.Enabled = enabled;
-        _vm.Flush();
+        if (vm is not null) vm.Enabled = enabled; // applied and saved at once
     }
 
     public void ReloadProfiles() => _vm!.Reload();
+
+    public bool HasUnsavedChanges { get { _vm!.ApplyPending(); return _vm.HasUnsavedChanges; } }
+
+    public void SaveProfiles() => _vm!.Save();
 
     public void ShowWindow()
     {
@@ -116,6 +120,24 @@ public partial class App : Application, IControlHost
 
     public bool IsQuitting => _quitting;
 
+    /// <summary>Exit from the window or tray: asks first if there are unsaved edits.</summary>
+    public void RequestQuit()
+    {
+        if (_quitting || _vm is null) return;
+        _vm.ApplyPending();
+        if (_vm.HasUnsavedChanges)
+        {
+            ShowWindow();
+            var answer = MessageBox.Show(_window!, "Save your changes to the profiles before closing?\n\n" +
+                "Yes = save, No = throw them away, Cancel = keep UCR-Next open.",
+                "UCR-Next", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
+            if (answer == MessageBoxResult.Cancel) return;
+            if (answer == MessageBoxResult.Yes) _vm.Save();
+        }
+        Quit();
+    }
+
+    /// <summary>Exits without asking (CLI "quit" checks for unsaved edits itself).</summary>
     public void Quit()
     {
         if (_quitting) return;
@@ -134,7 +156,6 @@ public partial class App : Application, IControlHost
 
     protected override void OnExit(ExitEventArgs e)
     {
-        _vm?.Flush();
         _pipe?.Dispose();
         _tray?.Dispose();
         _services?.Dispose();

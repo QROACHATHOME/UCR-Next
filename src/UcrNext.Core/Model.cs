@@ -250,6 +250,19 @@ public sealed class Binding
     /// Works for keyboard keys and mouse buttons (all devices via hooks, or one device via Interception).
     /// </summary>
     public bool Block { get; set; }
+    /// <summary>The <see cref="BindingGroup"/> this binding is shown in; null = not in a group.</summary>
+    public Guid? GroupId { get; set; }
+}
+
+/// <summary>A named, coloured group of bindings in a profile (e.g. "Player 1 pad"). Display only.</summary>
+public sealed class BindingGroup
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public string Name { get; set; } = "New group";
+    /// <summary>"#RRGGBB".</summary>
+    public string Color { get; set; } = "#3B82F6";
+    /// <summary>Folded up in the editor.</summary>
+    public bool Collapsed { get; set; }
 }
 
 public sealed class Profile
@@ -270,6 +283,8 @@ public sealed class Profile
     /// <summary>Free-form list of games that use this profile (shown in the UI, used by "ucrnext game").</summary>
     public List<string> Games { get; set; } = new();
     public List<Binding> Bindings { get; set; } = new();
+    /// <summary>Groups the bindings are organised in (in display order).</summary>
+    public List<BindingGroup> Groups { get; set; } = new();
 
     /// <summary>True if a skip rule matches one of the connected devices.</summary>
     public static bool SkippedByDevices(IReadOnlyCollection<DeviceMatch> rules, IReadOnlyCollection<DeviceInfo> connected) =>

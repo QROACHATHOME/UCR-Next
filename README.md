@@ -50,6 +50,18 @@ Status: **0.5**. Windows 10/11 only.
 - **UCR import**: *File → Import UCR profiles* reads UCR's `context.xml` (see below)
 - **Background mode**: tray icon (optional), start hidden at Windows logon, optionally as administrator
 - **Command line**: `ucrnext.exe status | start | stop | enable <profile> | solo <profile> | …`
+- **Save, Revert, Undo**: edits take effect at once so you can try them, but are only written to disk
+  when you **Save** (Ctrl+S). **Revert** goes back to the saved profiles; **Undo / Redo** (Ctrl+Z / Ctrl+Y)
+  step through your edits (a Revert or a deleted profile can be undone too). Closing with unsaved edits asks
+  first. Switching a profile on or off is not an edit: it applies and is saved at once.
+- **Copy, paste, duplicate, delete profiles**: the buttons above the profile list, its right-click menu,
+  or Ctrl+C / Ctrl+V / Ctrl+D / Del. Profiles and bindings are copied as text, so you can also paste them
+  into a message to share them, or use *File → Export / Import profile*. Copies start switched off.
+  Deleted profiles are moved to the profiles folder's `deleted` subfolder when you save.
+- **Groups**: sort a profile's bindings into named, coloured groups (e.g. *Player 1 pad*, *Keyboard*).
+  *+ Group* makes one, each binding's *Group* box moves it, *Group by controller* sorts every ungrouped
+  binding by its input device. Groups fold away, can be reordered, and copied into other profiles.
+- **Light and dark themes**: *View* menu — follow Windows (default), light or dark; uses the Windows accent colour
 - **Safety**: **Ctrl+Alt+Pause** always stops mapping and blocking; keys are never left stuck
   when bindings change, profiles switch, or mapping stops
 
@@ -131,9 +143,10 @@ ucrnext solo <profile>         enable only this profile
 ucrnext games                  list games and the profiles they use
 ucrnext game <game> [--start]  enable only the profile(s) listing this game (exact, or unique partial name)
 ucrnext import <context.xml> [--per-device]   import UCR profiles (works even when UCR-Next is closed)
-ucrnext reload                 reload profiles from disk (after editing the JSON by hand)
+ucrnext save                   save edits made in the window
+ucrnext reload                 reload profiles from disk (after editing the JSON by hand; drops unsaved edits)
 ucrnext show | hide            show or hide the window
-ucrnext quit                   exit UCR-Next
+ucrnext quit [--save|--discard]  exit UCR-Next (with unsaved edits it refuses unless told what to do with them)
 
 ucrnext launch [--background] [--start]           start UCR-Next if it is not running
 ucrnext autostart [status|off|logon|elevated]     start with Windows
@@ -198,12 +211,13 @@ when the window is closed*. Settings are stored in `%APPDATA%\UCR-Next\settings.
 ## Quick start
 
 1. Plug in your controller; it appears under **Detected devices**.
-2. **+ Add binding**, press **A** on the pad, choose **Key: Space** as output.
-3. **+ Add binding**, push the left stick fully right, choose **Xbox 360: LeftX** (or a vJoy axis).
+2. **+ Binding**, press **A** on the pad, choose **Key: Space** as output.
+3. **+ Binding**, push the left stick fully right, choose **Xbox 360: LeftX** (or a vJoy axis).
    Raise *Deadzone* (first slider) to about 0.15 if the stick drifts.
 4. Optional: type `game.exe` under *Only active while these programs are in front*, or use
    *Add running program*.
-5. **▶ Start mapping**. Check the virtual pad in `joy.cpl`.
+5. **Start mapping** and try it. Check the virtual pad in `joy.cpl`.
+6. **Save** (Ctrl+S) when you're happy, or **Revert** to go back to what was saved.
 
 ## Project layout
 
@@ -213,7 +227,7 @@ src/UcrNext.Core      engine (net8.0, no Windows deps): model, axis shaping, Map
                       ProfileStore, AppSettings, CommandProcessor + named-pipe transport
 src/UcrNext.Devices   Windows: XInput, DirectInput (Vortice), WinMM fallback, keyboard/mouse hooks,
                       Interception, SendInput, ViGEm, vJoy, foreground watcher, autostart
-src/UcrNext.App       WPF UI, tray icon, background mode, single instance, pipe server
+src/UcrNext.App       WPF UI (Fluent look via WPF-UI), tray icon, background mode, single instance, pipe server
 src/UcrNext.Cli       ucrnext.exe
 tests/UcrNext.Core.Tests  xUnit tests (engine, per-app, blocking, vJoy, commands, storage)
 ```

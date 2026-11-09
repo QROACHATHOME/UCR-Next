@@ -31,7 +31,7 @@ public partial class BindDialog : Window
     public BindDialog(CompositeInputSource inputs, bool interceptionRunning, Func<string>? hookDiagnostics = null)
     {
         _hookDiag = hookDiagnostics;
-        InitializeComponent();
+        InitializeComponent(); Theming.Prepare(this);
         _inputs = inputs;
         // Per-device mice work through Raw Input even without Interception, so always offer the choice.
         _interception = interceptionRunning;
