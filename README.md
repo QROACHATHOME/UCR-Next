@@ -5,7 +5,11 @@ It remaps any input (gamepad, joystick, wheel, keyboard, mouse) to any output (k
 a **virtual Xbox 360 controller** or **vJoy** joysticks), organised in profiles that are saved as JSON.
 It can run silently in the background, start with Windows, and be controlled from the command line.
 
-Status: **0.4**. Windows 10/11 only.
+Status: **0.5**. Windows 10/11 only.
+
+**Download:** grab `UCR-Next-<version>-win-x64.zip` from the
+[Releases](https://github.com/QROACHATHOME/UCR-Next/releases) page, unzip anywhere and run
+`UCR-Next.exe` — no .NET install needed. Then install the drivers you need (see Requirements).
 
 ## Features
 
@@ -88,6 +92,18 @@ Release build into one folder (contains `UCR-Next.exe` and `ucrnext.exe`):
 ```powershell
 dotnet publish src\UcrNext.App -c Release -o publish
 ```
+
+### Making a release
+
+Bump `<Version>` in `Directory.Build.props`, commit, then tag and push the tag:
+
+```powershell
+git tag v0.5.0
+git push origin v0.5.0
+```
+
+GitHub Actions (`.github/workflows/release.yml`) runs the tests, builds the self-contained app and
+publishes it as `UCR-Next-0.5.0-win-x64.zip` on a new release with notes generated from the commits.
 
 ### Startup options (`UCR-Next.exe`)
 

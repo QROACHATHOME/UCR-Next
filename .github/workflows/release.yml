@@ -1,0 +1,39 @@
+# Builds and publishes a release when a version tag is pushed:
+#   git tag v0.5.0
+#   git push origin v0.5.0
+# The release gets a self-contained Windows build (no .NET install needed) as a zip,
+# and release notes generated from the commits since the previous tag.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write   # create the release and upload the zip
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Test
+        run: dotnet test -c Release
+
+      - name: Publish
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}'.TrimStart('v')
+          dotnet publish src/UcrNext.App -c Release -r win-x64 --self-contained true -p:Version=$version -o out/UCR-Next
+          Copy-Item README.md, LICENSE out/UCR-Next/
+          Compress-Archive -Path out/UCR-Next/* -DestinationPath "UCR-Next-$version-win-x64.zip"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: UCR-Next-*-win-x64.zip
+          generate_release_notes: true
