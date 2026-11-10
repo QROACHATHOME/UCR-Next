@@ -1,6 +1,6 @@
 # UCR-Next
 
-A maintained, from-scratch successor to evilC's **Universal Control Remapper (UCR)**.
+A maintained, from-scratch successor to evilC's **Universal Control Remapper (UCR)**. Great thanks to evilC and the work he put into making the original UCR, without it the emulation scene wouldn't be the same!
 It remaps any input (gamepad, joystick, wheel, keyboard, mouse) to any output (keyboard, mouse,
 a **virtual Xbox 360 controller** or **vJoy** joysticks), organised in profiles that are saved as JSON.
 It can run silently in the background, start with Windows, and be controlled from the command line.
