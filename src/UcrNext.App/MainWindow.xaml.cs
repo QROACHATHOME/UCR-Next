@@ -181,13 +181,46 @@ public partial class MainWindow : Window
         menu.IsOpen = true;
     }
 
+    // ---- Devices list ----
+
+    private static DeviceVm? DeviceOf(object sender) => (sender as FrameworkElement)?.DataContext as DeviceVm;
+
+    private void DeviceRow_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ClickCount == 2 && DeviceOf(sender) is { } d) { EditDevice(d); e.Handled = true; }
+    }
+
+    private void EditDevice_Click(object sender, RoutedEventArgs e)
+    {
+        if (DeviceOf(sender) is { } d) EditDevice(d);
+    }
+
+    private void EditDevice(DeviceVm d) => new DeviceDialog(d, _vm.Catalog) { Owner = this }.ShowDialog();
+
+    private void HideDevice_Click(object sender, RoutedEventArgs e)
+    {
+        if (DeviceOf(sender) is not { } d) return;
+        _vm.Catalog.SetHidden(d.DeviceId, true);
+        _vm.Status = $"Hid \"{d.DisplayName}\" — tick 'Show hidden devices' under the list to see it again";
+    }
+
+    private void UnhideDevice_Click(object sender, RoutedEventArgs e)
+    {
+        if (DeviceOf(sender) is { } d) _vm.Catalog.SetHidden(d.DeviceId, false);
+    }
+
+    private void CopyDeviceId_Click(object sender, RoutedEventArgs e)
+    {
+        if (DeviceOf(sender) is { } d && SetClipboard(d.DeviceId)) _vm.Status = "Copied " + d.DeviceId;
+    }
+
     private void AddSkipDevice_Click(object sender, RoutedEventArgs e)
     {
         if (_vm.Selected is not { } profile || sender is not Button button) return;
         var menu = new ContextMenu { PlacementTarget = button };
         foreach (var d in _vm.Devices.Where(d => d.DeviceId is not ("keyboard" or "mouse")))
         {
-            var item = new MenuItem { Header = $"{d.Name}   ({d.DeviceId})" };
+            var item = new MenuItem { Header = $"{_vm.Catalog.Alias(d.DeviceId) ?? d.Name}   ({d.DeviceId})" };
             item.Click += (_, _) => profile.AddSkipDevice(d);
             menu.Items.Add(item);
         }

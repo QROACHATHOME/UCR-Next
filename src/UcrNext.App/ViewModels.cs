@@ -114,14 +114,35 @@ public sealed class BindingVm : Observable
         set { if (Model.Enabled == value) return; Model.Enabled = value; Raise(); _changed(this); }
     }
 
-    public string InputText => Model.Input?.ToString() ?? "(press Bind…)";
+    /// <summary>The input as bound, with your name for its device in front ("P1 stick · Button 3").</summary>
+    public string InputText
+    {
+        get
+        {
+            if (Model.Input is not { } i) return "(press Bind…)";
+            var alias = DeviceCatalog.Current?.Alias(i.DeviceId);
+            return alias is null ? i.ToString() : $"{alias} · {i}";
+        }
+    }
+
+    public ImageSource? DeviceImage => Model.Input is { } i ? DeviceCatalog.Current?.Image(i.DeviceId) : null;
+    public bool HasDeviceImage => DeviceImage is not null;
+    public bool HasDeviceIcon => Model.Input is not null && DeviceImage is null;
+    public Wpf.Ui.Controls.SymbolRegular DeviceIcon => DeviceCatalog.IconFor(Model.Input?.DeviceId ?? "");
+    public string DeviceToolTip => Model.Input is { } i ? ProfileVm.DeviceName(i.DeviceId) : "";
+
+    internal void NotifyDevice()
+    {
+        foreach (var n in new[] { nameof(InputText), nameof(DeviceImage), nameof(HasDeviceImage), nameof(HasDeviceIcon), nameof(DeviceIcon), nameof(DeviceToolTip) })
+            Raise(n);
+    }
 
     public void SetInput(InputRef input)
     {
         Model.Input = input;
         if (Model.Name is "" or "New binding") Model.Name = input.Label;
         if (!IsBlockable) Model.Block = false;
-        Raise(nameof(InputText)); Raise(nameof(Name)); Raise(nameof(IsAnalogInput)); Raise(nameof(IsBlockable)); Raise(nameof(Block));
+        NotifyDevice(); Raise(nameof(Name)); Raise(nameof(IsAnalogInput)); Raise(nameof(IsBlockable)); Raise(nameof(Block));
         Raise(nameof(CanUseFullRange)); Raise(nameof(ShowBlockHint));
         _changed(this);
         Owner.RequestRebuild(); // group summaries list the devices used
@@ -609,10 +630,14 @@ public sealed class MainViewModel : Observable
     private string _liveText = "";
     private bool _hasUnsaved;
     private Autostart.Mode _autostart;
+    private readonly DispatcherTimer _activityTimer;
+    private readonly Dictionary<InputRef, double> _lastValues = new();
 
     public MainViewModel(AppServices services)
     {
         _s = services;
+        Catalog = new DeviceCatalog(_s);
+        Catalog.Changed += OnCatalogChanged;
         OutputOption.Initialize(_s.VJoy.Devices);
         ProfileVm.DeviceName = DeviceLabel;
 
@@ -631,6 +656,9 @@ public sealed class MainViewModel : Observable
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _refreshTimer.Tick += (_, _) => Refresh();
         _refreshTimer.Start();
+        // Lights up a device in the list when it is used, to tell identical devices apart.
+        _activityTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(80), DispatcherPriority.Background, (_, _) => CheckActivity(), Dispatcher.CurrentDispatcher);
+        _activityTimer.Start();
         _autostart = _s.AutostartMode;
         Refresh();
 
@@ -642,6 +670,19 @@ public sealed class MainViewModel : Observable
     public AppServices Services => _s;
     public ObservableCollection<ProfileVm> Profiles { get; } = new();
     public ObservableCollection<DeviceInfo> Devices { get; } = new();
+    /// <summary>The "Detected devices" list: your names and pictures, hidden ones left out unless shown.</summary>
+    public ObservableCollection<DeviceVm> DeviceList { get; } = new();
+    public DeviceCatalog Catalog { get; }
+
+    public bool ShowHiddenDevices
+    {
+        get => _s.Settings.ShowHiddenDevices;
+        set { _s.Settings.ShowHiddenDevices = value; _s.SaveSettings(); Raise(); SyncDeviceList(); }
+    }
+
+    public int HiddenDeviceCount => Devices.Count(d => Catalog.IsHidden(d.DeviceId));
+    public string HiddenDevicesText => $"Show hidden devices ({HiddenDeviceCount})";
+    public bool AnyHiddenDevices => HiddenDeviceCount > 0 || ShowHiddenDevices;
 
     public ProfileVm? Selected { get => _selected; set => Set(ref _selected, value); }
     public string Status { get => _status; set => Set(ref _status, value); }
@@ -1007,6 +1048,7 @@ public sealed class MainViewModel : Observable
     /// <summary>"xinput:0" → "Xbox controller 1", "dinput:…" → the stick's name when it is connected.</summary>
     private string DeviceLabel(string deviceId)
     {
+        if (Catalog.Alias(deviceId) is { } alias) return alias;
         var d = Devices.FirstOrDefault(x => string.Equals(x.DeviceId, deviceId, StringComparison.OrdinalIgnoreCase));
         if (d is not null && !string.IsNullOrWhiteSpace(d.Name)) return d.Name;
         if (deviceId == KeyboardMouseHookProvider.KeyboardId) return "Keyboard";
@@ -1026,6 +1068,7 @@ public sealed class MainViewModel : Observable
         {
             Devices.Clear();
             foreach (var d in now) Devices.Add(d);
+            SyncDeviceList();
         }
         var active = _s.Engine.ActiveProfileNames;
         var skipped = _s.Engine.SkippedProfileNames;
@@ -1034,5 +1077,68 @@ public sealed class MainViewModel : Observable
                    $"   ·   Foreground: {_s.Engine.ForegroundApp ?? "-"}";
         Raise(nameof(PadStatus));
         Raise(nameof(DetailsText));
+    }
+
+    // ---- Devices list ----
+
+    private void OnCatalogChanged()
+    {
+        foreach (var d in DeviceList) d.Refresh();
+        SyncDeviceList();
+        foreach (var p in Profiles)
+        {
+            foreach (var b in p.Bindings) b.NotifyDevice();
+            p.RequestRebuild(); // group summaries name the devices
+        }
+    }
+
+    private void SyncDeviceList()
+    {
+        var byId = DeviceList.ToDictionary(d => d.DeviceId, StringComparer.OrdinalIgnoreCase);
+        var wanted = new List<DeviceVm>();
+        foreach (var info in Devices)
+        {
+            if (!ShowHiddenDevices && Catalog.IsHidden(info.DeviceId)) continue;
+            if (byId.TryGetValue(info.DeviceId, out var vm)) vm.Update(info);
+            else vm = new DeviceVm(info, Catalog);
+            if (!wanted.Contains(vm)) wanted.Add(vm);
+        }
+        if (!wanted.SequenceEqual(DeviceList))
+        {
+            DeviceList.Clear();
+            foreach (var d in wanted) DeviceList.Add(d);
+        }
+        Raise(nameof(HiddenDeviceCount)); Raise(nameof(HiddenDevicesText)); Raise(nameof(AnyHiddenDevices));
+    }
+
+    /// <summary>
+    /// Marks devices that just had a button pressed or an axis moved. Paused while a bind dialog is
+    /// open: it reads the same inputs (mouse movement is consumed by whoever reads it).
+    /// </summary>
+    private void CheckActivity()
+    {
+        long now = Environment.TickCount64;
+        if (System.Windows.Application.Current?.Windows.OfType<BindDialog>().Any() == true) return;
+        HashSet<string>? active = null;
+        try
+        {
+            foreach (var (input, value) in _s.Inputs.ReadAll())
+            {
+                bool hit = input.Kind switch
+                {
+                    InputKind.Button => value >= 0.5,
+                    InputKind.Delta => Math.Abs(value) > 0.05,
+                    _ => _lastValues.TryGetValue(input, out var last) && Math.Abs(value - last) > 0.08,
+                };
+                if (input.Kind is InputKind.Axis or InputKind.Trigger) _lastValues[input] = value;
+                if (hit) (active ??= new(StringComparer.OrdinalIgnoreCase)).Add(input.DeviceId);
+            }
+        }
+        catch (Exception) { return; } // a device went away mid-read
+        foreach (var d in DeviceList)
+        {
+            if (active?.Contains(d.DeviceId) == true) d.ActiveUntil = now + 350;
+            d.IsActive = now < d.ActiveUntil;
+        }
     }
 }

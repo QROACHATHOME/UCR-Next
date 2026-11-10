@@ -153,10 +153,13 @@ public sealed class RawInputProvider : IInputProvider, IDeltaSource, IDisposable
         string prefix = keyboard ? KeyboardPrefix : MousePrefix;
         int n = _ordinals[prefix + key] = _ordinals.TryGetValue(prefix + key, out var c) ? c + 1 : 1;
         string kind = keyboard ? "Keyboard" : "Mouse";
+        // The product name the device reports ("I-PAC 2 (Ultimarc)"); the id keeps VID:PID so bindings don't change.
+        string? product = m.Success ? HidNames.Describe(path) : null;
         d = new Dev
         {
             Id = $"{prefix}{key}#{n}",
-            Name = (m.Success ? $"{kind} {key}" : $"{kind} (built-in / unknown)") + (n > 1 ? $" #{n}" : ""),
+            Name = (product is not null ? $"{product} ({kind.ToLowerInvariant()})"
+                    : m.Success ? $"{kind} {key}" : $"{kind} (built-in / unknown)") + (n > 1 ? $" #{n}" : ""),
             IsKeyboard = keyboard,
             Keys = keyboard ? new bool[MaxKey] : null,
         };

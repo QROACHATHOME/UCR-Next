@@ -111,7 +111,7 @@
                 <ColumnDefinition Width="8" />
                 <ColumnDefinition Width="*" MinWidth="420" />
                 <ColumnDefinition Width="8" />
-                <ColumnDefinition Width="250" MinWidth="160" />
+                <ColumnDefinition Width="300" MinWidth="180" />
             </Grid.ColumnDefinitions>
 
             <!-- Profiles -->
@@ -232,7 +232,7 @@
                     <!-- Column titles -->
                     <Grid DockPanel.Dock="Top" Margin="14,0,26,4">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="40" /><ColumnDefinition Width="2*" /><ColumnDefinition Width="3*" />
+                            <ColumnDefinition Width="40" /><ColumnDefinition Width="2*" /><ColumnDefinition Width="4*" />
                             <ColumnDefinition Width="3*" /><ColumnDefinition Width="170" /><ColumnDefinition Width="72" />
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="1" Text="Name" Style="{StaticResource Faint}" />
@@ -323,7 +323,7 @@
                                                                 <StackPanel>
                                                                     <Grid>
                                                                         <Grid.ColumnDefinitions>
-                                                                            <ColumnDefinition Width="40" /><ColumnDefinition Width="2*" /><ColumnDefinition Width="3*" />
+                                                                            <ColumnDefinition Width="40" /><ColumnDefinition Width="2*" /><ColumnDefinition Width="4*" />
                                                                             <ColumnDefinition Width="3*" /><ColumnDefinition Width="170" /><ColumnDefinition Width="72" />
                                                                         </Grid.ColumnDefinitions>
                                                                         <CheckBox Grid.Column="0" VerticalAlignment="Center" HorizontalAlignment="Left" Margin="4,0,0,0" Padding="0" IsChecked="{Binding Enabled}" ToolTip="Binding enabled" MinWidth="0" />
@@ -331,6 +331,17 @@
                                                                                  Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" />
                                                                         <DockPanel Grid.Column="2" Margin="2">
                                                                             <Button DockPanel.Dock="Right" Content="Bind…" Click="BindInput_Click" />
+                                                                            <Border DockPanel.Dock="Left" Width="26" Height="26" CornerRadius="4" ClipToBounds="True" Margin="2,0,2,0"
+                                                                                    VerticalAlignment="Center" ToolTip="{Binding DeviceToolTip}"
+                                                                                    Background="{DynamicResource ControlFillColorDefaultBrush}">
+                                                                                <Grid>
+                                                                                    <Image Source="{Binding DeviceImage}" Stretch="UniformToFill"
+                                                                                           Visibility="{Binding HasDeviceImage, Converter={StaticResource BoolToVis}}" />
+                                                                                    <ui:SymbolIcon Symbol="{Binding DeviceIcon}" FontSize="15" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                                                                   Visibility="{Binding HasDeviceIcon, Converter={StaticResource BoolToVis}}" />
+                                                                                </Grid>
+                                                                            </Border>
                                                                             <TextBlock VerticalAlignment="Center" Margin="4,0" Text="{Binding InputText}" TextTrimming="CharacterEllipsis"
                                                                                        ToolTip="{Binding InputText}" />
                                                                         </DockPanel>
@@ -417,18 +428,74 @@
             <!-- Devices -->
             <Border Grid.Column="4" Style="{StaticResource Card}" Padding="8">
                 <DockPanel>
-                    <TextBlock DockPanel.Dock="Top" Text="Detected devices" Style="{StaticResource SectionTitle}" Margin="2,0,0,6" />
-                    <TextBlock DockPanel.Dock="Bottom" TextWrapping="Wrap" Style="{StaticResource Faint}" Margin="2,6,2,0"
-                               Text="Refreshes every second. Xbox controllers use XInput; other sticks, wheels and pads use DirectInput. Each keyboard and mouse is also listed separately (Raw Input, or Interception when on)." />
-                    <ScrollViewer VerticalScrollBarVisibility="Auto"><ItemsControl ItemsSource="{Binding Devices}" Margin="2,0">
+                    <TextBlock DockPanel.Dock="Top" Text="Detected devices" Style="{StaticResource SectionTitle}" Margin="2,0,0,2" />
+                    <TextBlock DockPanel.Dock="Top" Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="2,0,2,6"
+                               Text="Press something on a device and it lights up. Double-click to name it, add notes or a picture." />
+                    <StackPanel DockPanel.Dock="Bottom" Margin="2,6,2,0">
+                        <CheckBox Content="{Binding HiddenDevicesText}" IsChecked="{Binding ShowHiddenDevices}" MinWidth="0"
+                                  Visibility="{Binding AnyHiddenDevices, Converter={StaticResource BoolToVis}}" />
+                        <TextBlock TextWrapping="Wrap" Style="{StaticResource Faint}" Margin="0,4,0,0"
+                                   Text="Xbox controllers use XInput; other sticks, wheels and pads use DirectInput. Each keyboard and mouse is also listed separately (Raw Input, or Interception when on)." />
+                    </StackPanel>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto"><ItemsControl ItemsSource="{Binding DeviceList}">
                         <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <StackPanel Margin="0,2">
-                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                                    <TextBlock Style="{StaticResource Faint}" TextTrimming="CharacterEllipsis">
-                                        <Run Text="{Binding Provider, Mode=OneWay}" /><Run Text=" · " /><Run Text="{Binding DeviceId, Mode=OneWay}" />
-                                    </TextBlock>
-                                </StackPanel>
+                            <DataTemplate DataType="{x:Type local:DeviceVm}">
+                                <Grid Margin="0,1" Opacity="{Binding RowOpacity}">
+                                    <!-- flashes when the device is used -->
+                                    <Border x:Name="Flash" CornerRadius="6" Background="#3322C55E" BorderBrush="#22C55E" BorderThickness="1" Opacity="0" />
+                                    <Border x:Name="Row" CornerRadius="6" Padding="6,5" Background="Transparent" ToolTip="{Binding ToolTip}"
+                                            MouseLeftButtonDown="DeviceRow_MouseDown">
+                                        <Border.ContextMenu>
+                                            <ContextMenu>
+                                                <MenuItem Header="Name, notes and picture…" Click="EditDevice_Click" />
+                                                <MenuItem Header="Hide" Click="HideDevice_Click" />
+                                                <MenuItem Header="Show again" Click="UnhideDevice_Click" />
+                                                <Separator />
+                                                <MenuItem Header="Copy device id" Click="CopyDeviceId_Click" />
+                                            </ContextMenu>
+                                        </Border.ContextMenu>
+                                        <DockPanel>
+                                            <!-- picture or type icon -->
+                                            <Border DockPanel.Dock="Left" Width="44" Height="44" CornerRadius="6" ClipToBounds="True" Margin="0,0,10,0"
+                                                    Background="{DynamicResource ControlFillColorDefaultBrush}" VerticalAlignment="Top">
+                                                <Grid>
+                                                    <Image Source="{Binding Image}" Stretch="UniformToFill"
+                                                           Visibility="{Binding HasImage, Converter={StaticResource BoolToVis}}" />
+                                                    <ui:SymbolIcon Symbol="{Binding Icon}" FontSize="22" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                                   Visibility="{Binding HasNoImage, Converter={StaticResource BoolToVis}}" />
+                                                </Grid>
+                                            </Border>
+                                            <ui:Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Icon="{ui:SymbolIcon Edit24}" VerticalAlignment="Top"
+                                                       Click="EditDevice_Click" AutomationProperties.Name="Edit device" ToolTip="Name, notes and picture" />
+                                            <StackPanel VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" TextWrapping="Wrap" MaxHeight="40" TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Text="{Binding Subtitle}" Style="{StaticResource Faint}" TextWrapping="Wrap" MaxHeight="30" TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Text="{Binding Notes}" FontSize="11" TextWrapping="Wrap" MaxHeight="32" TextTrimming="CharacterEllipsis"
+                                                           Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"
+                                                           Visibility="{Binding HasNotes, Converter={StaticResource BoolToVis}}" />
+                                            </StackPanel>
+                                        </DockPanel>
+                                    </Border>
+                                </Grid>
+                                <DataTemplate.Triggers>
+                                    <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                        <DataTrigger.EnterActions>
+                                            <BeginStoryboard>
+                                                <Storyboard>
+                                                    <DoubleAnimation Storyboard.TargetName="Flash" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.08" />
+                                                </Storyboard>
+                                            </BeginStoryboard>
+                                        </DataTrigger.EnterActions>
+                                        <DataTrigger.ExitActions>
+                                            <BeginStoryboard>
+                                                <Storyboard>
+                                                    <DoubleAnimation Storyboard.TargetName="Flash" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.7" />
+                                                </Storyboard>
+                                            </BeginStoryboard>
+                                        </DataTrigger.ExitActions>
+                                    </DataTrigger>
+                                </DataTemplate.Triggers>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl></ScrollViewer>

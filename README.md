@@ -61,6 +61,11 @@ Status: **0.5**. Windows 10/11 only.
 - **Groups**: sort a profile's bindings into named, coloured groups (e.g. *Player 1 pad*, *Keyboard*).
   *+ Group* makes one, each binding's *Group* box moves it, *Group by controller* sorts every ungrouped
   binding by its input device. Groups fold away, can be reordered, and copied into other profiles.
+- **Recognise your devices**: keyboards and mice show the product name they report (e.g. *I-PAC 2*)
+  instead of only VID:PID. A device lights up in *Detected devices* when you press something on it.
+  Double-click a device to give it your own name, notes and a picture (choose a file or paste one);
+  the name and picture also appear on bindings and in *Group by controller*. Devices you never use
+  can be hidden. Stored in `settings.json`; pictures are copied to `%APPDATA%\UCR-Next\device-images`.
 - **Light and dark themes**: *View* menu — follow Windows (default), light or dark; uses the Windows accent colour
 - **Safety**: **Ctrl+Alt+Pause** always stops mapping and blocking; keys are never left stuck
   when bindings change, profiles switch, or mapping stops
