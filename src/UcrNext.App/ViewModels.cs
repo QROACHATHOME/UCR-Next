@@ -120,15 +120,16 @@ public sealed class BindingVm : Observable
         get
         {
             if (Model.Input is not { } i) return Binding.NeedsInput(Model.Mode) ? "(press Bind…)" : "(no input needed)";
+            if (i.Slot is { } slot) return $"{slot} (slot) · {i}";
             var alias = DeviceCatalog.Current?.Alias(i.DeviceId);
             return alias is null ? i.ToString() : $"{alias} · {i}";
         }
     }
 
-    public ImageSource? DeviceImage => Model.Input is { } i ? DeviceCatalog.Current?.Image(i.DeviceId) : null;
+    public ImageSource? DeviceImage => Model.Input is { } i ? DeviceCatalog.Current?.Image(ProfileVm.SlotDevice(i.DeviceId)) : null;
     public bool HasDeviceImage => DeviceImage is not null;
     public bool HasDeviceIcon => Model.Input is not null && DeviceImage is null;
-    public Wpf.Ui.Controls.SymbolRegular DeviceIcon => DeviceCatalog.IconFor(Model.Input?.DeviceId ?? "");
+    public Wpf.Ui.Controls.SymbolRegular DeviceIcon => DeviceCatalog.IconFor(ProfileVm.SlotDevice(Model.Input?.DeviceId ?? ""));
     public string DeviceToolTip => Model.Input is { } i ? ProfileVm.DeviceName(i.DeviceId) : "";
 
     internal void NotifyDevice()
@@ -378,6 +379,15 @@ public sealed class ProfileVm : Observable
 
     /// <summary>Turns a device id into a readable name (set by the main view model, which knows the devices).</summary>
     public static Func<string, string> DeviceName { get; set; } = id => id;
+    /// <summary>"slot:P1 stick" → the id of the controller filling it (other ids unchanged).</summary>
+    public static Func<string, string> SlotDevice { get; set; } = id => id;
+
+    /// <summary>Wait until every controller the bindings read is connected (no virtual pad for a missing controller).</summary>
+    public bool RequireDevices
+    {
+        get => Model.RequireDevices;
+        set { if (Model.RequireDevices == value) return; Model.RequireDevices = value; Raise(); _changed(this); }
+    }
 
     public ProfileVm(Profile model, Action<ProfileVm> changed, Action<ProfileVm> enabledChanged)
     {
@@ -659,6 +669,10 @@ public sealed class MainViewModel : Observable
         Catalog.Changed += OnCatalogChanged;
         OutputOption.Initialize(_s.VJoy.Devices);
         ProfileVm.DeviceName = DeviceLabel;
+        ProfileVm.SlotDevice = id => InputRef.SlotOf(id) is { } n &&
+            _s.Settings.DeviceSlots.FirstOrDefault(x => string.Equals(x.Name, n, StringComparison.OrdinalIgnoreCase)) is { } slot
+            ? (_s.Engine.SlotAssignments.TryGetValue(n, out var ids) && ids[0] is { } live ? live : slot.Device.DeviceId)
+            : id;
 
         // Edits take effect (and become an undo step) shortly after the last change, so typing
         // or dragging a slider is one step. Nothing is written to disk until Save.
@@ -962,6 +976,15 @@ public sealed class MainViewModel : Observable
             : InterceptionRunning ? UcrImporter.PerDevice.Interception : UcrImporter.PerDevice.RawInput;
         var result = new UcrImporter(KeyMapping.ScanToVk, mode).ImportFile(path);
         result.SaveTo(_s.Store);
+        if (result.Slots.Count > 0)
+        {
+            // UCR shadow devices → device slots (an existing slot with the same name is kept).
+            var slots = _s.Settings.DeviceSlots;
+            foreach (var sl in result.Slots)
+                if (!slots.Any(x => string.Equals(x.Name, sl.Name, StringComparison.OrdinalIgnoreCase))) slots.Add(sl);
+            _s.SaveSettings();
+            _s.Engine.SetDeviceSlots(slots);
+        }
         foreach (var imported in result.Profiles)
         {
             var p = _s.Store.Load(imported.Id) ?? imported;
@@ -978,6 +1001,51 @@ public sealed class MainViewModel : Observable
         CommitChange();
         Status = $"Imported {result.Profiles.Count} UCR profile(s) — they start disabled; tick the ones you want";
         return result;
+    }
+
+    /// <summary>
+    /// Saves the device slots. Bindings follow renamed slots; with <paramref name="convert"/>,
+    /// bindings that read a slot's controller directly are switched to the slot.
+    /// </summary>
+    public void ApplySlots(List<DeviceSlot> slots, IReadOnlyDictionary<string, string> renames, bool convert)
+    {
+        ApplyPending();
+        InputRef? Map(InputRef? r)
+        {
+            if (r is null) return null;
+            if (r.Slot is { } n)
+                return renames.TryGetValue(n, out var to) ? new InputRef(InputRef.SlotId(to), r.Kind, r.Index, r.Label) : null;
+            if (!convert) return null;
+            var slot = slots.FirstOrDefault(sl => sl.Device.DeviceId.Length > 0 && string.Equals(sl.Device.DeviceId, r.DeviceId, StringComparison.OrdinalIgnoreCase));
+            return slot is null ? null : new InputRef(InputRef.SlotId(slot.Name), r.Kind, r.Index, r.Label);
+        }
+        int changed = 0;
+        foreach (var p in Profiles)
+            foreach (var b in p.Bindings)
+            {
+                if (Map(b.Model.Input) is { } input) { b.SetInput(input); changed++; }
+                for (int i = 0; i < b.Model.ExtraInputs.Count; i++)
+                    if (Map(b.Model.ExtraInputs[i]) is { } extra) { b.SetExtra(i, extra); changed++; }
+            }
+        _s.Settings.DeviceSlots = slots;
+        _s.SaveSettings();
+        _s.Engine.SetDeviceSlots(slots);
+        foreach (var p in Profiles)
+        {
+            foreach (var b in p.Bindings) b.NotifyDevice();
+            p.RequestRebuild();
+        }
+        Status = $"Saved {slots.Count} device slot(s)" + (changed == 0 ? "" : $"; {changed} input(s) now read a slot (not saved yet)");
+    }
+
+    /// <summary>A control of a slot's controller is bound through the slot.</summary>
+    public InputRef UseSlot(InputRef input)
+    {
+        var assigned = _s.Engine.SlotAssignments;
+        foreach (var sl in _s.Settings.DeviceSlots)
+            if (assigned.TryGetValue(sl.Name, out var ids) && ids[0] is { } id && string.Equals(id, input.DeviceId, StringComparison.OrdinalIgnoreCase))
+                return new InputRef(InputRef.SlotId(sl.Name), input.Kind, input.Index, input.Label);
+        return input;
     }
 
     /// <summary>Re-reads every profile from disk (CLI "reload"; unsaved edits are dropped but can be undone).</summary>
@@ -1067,6 +1135,11 @@ public sealed class MainViewModel : Observable
     /// <summary>"xinput:0" → "Xbox controller 1", "dinput:…" → the stick's name when it is connected.</summary>
     private string DeviceLabel(string deviceId)
     {
+        if (InputRef.SlotOf(deviceId) is { } slotName)
+        {
+            string dev = ProfileVm.SlotDevice(deviceId);
+            return $"Slot \"{slotName}\": " + (dev.Length == 0 || dev == deviceId ? "no controller" : DeviceLabel(dev));
+        }
         if (Catalog.Alias(deviceId) is { } alias) return alias;
         var d = Devices.FirstOrDefault(x => string.Equals(x.DeviceId, deviceId, StringComparison.OrdinalIgnoreCase));
         if (d is not null && !string.IsNullOrWhiteSpace(d.Name)) return d.Name;
@@ -1091,8 +1164,10 @@ public sealed class MainViewModel : Observable
         }
         var active = _s.Engine.ActiveProfileNames;
         var skipped = _s.Engine.SkippedProfileNames;
+        var waiting = _s.Engine.WaitingProfileNames;
         LiveText = $"Active: {(active.Count == 0 ? "none" : string.Join(", ", active))}" +
                    (skipped.Count == 0 ? "" : $"   ·   Skipped (device connected): {string.Join(", ", skipped)}") +
+                   (waiting.Count == 0 ? "" : $"   ·   Waiting for controllers: {string.Join(", ", waiting)}") +
                    $"   ·   Foreground: {_s.Engine.ForegroundApp ?? "-"}";
         Raise(nameof(PadStatus));
         Raise(nameof(DetailsText));

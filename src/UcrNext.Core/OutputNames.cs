@@ -14,9 +14,29 @@ public static class OutputNames
         OutputTarget.Mouse => "Mouse move: " + (MouseAxis)o.Index,
         OutputTarget.Xbox360 when o.Kind == OutputKind.Button => $"Xbox 360 #{o.Device + 1}: {(XboxButton)o.Index}",
         OutputTarget.Xbox360 => $"Xbox 360 #{o.Device + 1}: {(XboxAxis)o.Index}",
+        OutputTarget.DualShock4 when o.Kind == OutputKind.Button => $"DualShock 4 #{o.Device + 1}: {Ds4ButtonName(o.Index)}",
+        OutputTarget.DualShock4 => $"DualShock 4 #{o.Device + 1}: {Ds4AxisName(o.Index)}",
+        OutputTarget.VJoy when o.Kind == OutputKind.Pov => $"vJoy {o.Device}: POV {o.Index / 4 + 1} {PovDirections[o.Index % 4]}",
         OutputTarget.VJoy when o.Kind == OutputKind.Button => $"vJoy {o.Device}: Button {o.Index + 1}",
         OutputTarget.VJoy => $"vJoy {o.Device}: Axis {(VJoyAxis)o.Index}",
         _ => "?",
+    };
+
+    private static readonly string[] PovDirections = { "Up", "Right", "Down", "Left" };
+
+    private static string Ds4ButtonName(int i) => (Ds4Button)i switch
+    {
+        Ds4Button.L2 => "L2 (button)",
+        Ds4Button.R2 => "R2 (button)",
+        Ds4Button.Touchpad => "Touchpad click",
+        Ds4Button b => b.ToString(),
+    };
+
+    private static string Ds4AxisName(int i) => (XboxAxis)i switch
+    {
+        XboxAxis.LeftTrigger => "L2 (analog)",
+        XboxAxis.RightTrigger => "R2 (analog)",
+        XboxAxis a => a.ToString(),
     };
 
     /// <summary>Every output the UI offers, virtual pads first.</summary>
@@ -27,10 +47,17 @@ public static class OutputNames
             foreach (XboxAxis a in Enum.GetValues<XboxAxis>()) yield return OutputRef.Xbox(a, pad);
             foreach (XboxButton b in Enum.GetValues<XboxButton>()) yield return OutputRef.Xbox(b, pad);
         }
+        for (int pad = 0; pad < OutputRef.MaxXboxPads; pad++)
+        {
+            foreach (XboxAxis a in Enum.GetValues<XboxAxis>()) yield return OutputRef.Ds4(a, pad);
+            foreach (Ds4Button b in Enum.GetValues<Ds4Button>()) yield return OutputRef.Ds4(b, pad);
+        }
         foreach (var d in vjoy ?? Enumerable.Empty<VJoyDeviceInfo>())
         {
             foreach (var a in d.Axes) yield return OutputRef.VJoy(d.Id, a);
             for (int b = 1; b <= d.Buttons; b++) yield return OutputRef.VJoyButton(d.Id, b);
+            for (int h = 1; h <= Math.Min(d.Povs, OutputRef.MaxPovHats); h++)
+                for (int dir = 0; dir < 4; dir++) yield return OutputRef.VJoyPov(d.Id, h, dir);
         }
         foreach (MouseButton b in Enum.GetValues<MouseButton>()) yield return OutputRef.Mouse(b);
         foreach (MouseAxis a in Enum.GetValues<MouseAxis>()) yield return OutputRef.Mouse(a);

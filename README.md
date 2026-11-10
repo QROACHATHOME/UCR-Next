@@ -25,7 +25,10 @@ Status: **0.5**. Windows 10/11 only.
   - **Per-device** keyboards and mice through the optional **Interception** driver
 - **Outputs**: keyboard, mouse buttons, mouse movement and **mouse wheel** (one notch per button press,
   or continuous scrolling from an axis; SendInput, scan codes), up to **four virtual Xbox 360** pads
-  (P1–P4, ViGEmBus; plugged in in order so games number them correctly), **vJoy** devices 1–16
+  (P1–P4, ViGEmBus; plugged in in order so games number them correctly), up to **four virtual
+  DualShock 4** pads (for games that want a PlayStation controller; numbered separately, they don't
+  take an Xbox slot), **vJoy** devices 1–16 with axes, buttons and **POV hats** (pressing two
+  directions gives the diagonal)
 - **Bindings**: any input → any output, with deadzone, anti-deadzone, sensitivity (linear or UCR's
   curve), invert; analog → button past a threshold; button → axis with pressed/released values;
   **Toggle** (press for on, again for off) and **Pulse** (a fixed-length press on each press or release) for buttons
@@ -58,6 +61,18 @@ Status: **0.5**. Windows 10/11 only.
   while one of them is in the foreground; profiles without programs are always active
 - **Skip while a device is connected**: e.g. a "pad as steering wheel" profile stays off — and creates
   no virtual controller — while your real wheel is plugged in
+- **Device slots** (*Settings → Device slots and extra players…*): bindings read a named slot such as
+  "P1 stick" instead of one exact controller, and the slot says which controller fills it. Replace a
+  stick or let Windows renumber it and you change one setting instead of every binding (a slot also
+  finds its controller by name if its id changed). Binding a control of a slot's controller uses the
+  slot automatically; the dialog can switch existing bindings over.
+- **Extra players** (UCR's shadow devices): give a slot extra controllers for players 2–4 and every
+  binding that reads it also runs for each of them, driving the next virtual pad / vJoy device
+  (player 2 → Xbox 360 #2) with its own states. A player's copy only runs while that controller is
+  connected, so no virtual pad is plugged in for a missing controller.
+- **Wait until its controllers are connected** (per profile): the profile stays off until every
+  controller its bindings read is plugged in, so a virtual pad never takes an Xbox slot ahead of a
+  real pad that's still missing.
 - **Games list per profile**, plus `ucrnext game "<name>"` to switch to the right profile from a launcher
 - **UCR import**: *File → Import UCR profiles* reads UCR's `context.xml` (see below)
 - **Background mode**: tray icon (optional), start hidden at Windows logon, optionally as administrator
@@ -185,6 +200,14 @@ Expand **Profile settings** above the bindings list:
   While any listed device is connected the profile is inactive and no virtual controller is created for
   it. Devices are matched by id (`dinput:VID:PID#n`, so moving the wheel to another USB port is fine)
   or by name. `ucrnext status` shows "Skipped (device connected)".
+- **Wait until its controllers are connected** — see above; `ucrnext status` shows "Waiting for their controllers".
+
+### Virtual pads and leftover ("ghost") controllers
+
+UCR-Next plugs virtual pads in only while an active profile uses them and unplugs them when it no
+longer needs them, when mapping is switched off and when it closes. If UCR-Next crashes or is killed,
+the ViGEmBus driver unplugs its pads by itself, because they belong to UCR-Next's connection to the
+driver. Nothing is left behind, and a missing controller never creates anything.
 
 ## Importing UCR profiles
 
@@ -202,12 +225,13 @@ use *File → Import UCR profiles…*, or `ucrnext import path\to\context.xml`.
 | UCR | UCR-Next |
 |---|---|
 | Inputs: XInput, DirectInput (VID/PID + instance), Interception keyboard keys, mouse buttons, mouse movement and wheel | same devices; keyboard/mouse become "any keyboard/mouse" unless you choose per-device — then Interception ids if Interception is running (can block), otherwise Raw Input ids (no driver, can't block; the report lists bindings that blocked in UCR) |
-| Outputs: ViGEm Xbox 360 pads 1–4, vJoy axes/buttons, Interception keyboard keys / mouse buttons / mouse movement | virtual Xbox 360 pads P1–P4, vJoy, SendInput |
+| Inputs with shadow devices | a device slot named after the device, with the shadow devices as extra players (the report notes output shadow devices that aren't simply the next pad / vJoy device) |
+| Outputs: ViGEm Xbox 360 and DualShock 4 pads 1–4, vJoy axes/buttons/POV hats, Interception keyboard keys / mouse buttons / mouse movement | virtual Xbox 360 pads P1–P4, DualShock 4 #1–#4, vJoy, SendInput |
 | Plugins: Button to Button, Axis to Axis, Axes to Axes, Axis to Button, Button to Axis, Buttons to Axis, Axis Splitter, Axis Merger, Axis Initializer, Button to Event, Button to Filter, Axis to Filter, and HidWizards/UCR-Plugins: Axes to Axes (Rotation), Axes to Axes (Trim), Axes Range to Button, Axis to Axis Increment, Button to Buttons (Long Press), Delta to Axis, Delta to Buttons, Axis to Delta, Event to Button, FPV Angle Mix, Reversible Throttle | converted to the binding modes above with the same maths as UCR (deadzones incl. circular, anti-deadzone, UCR's sensitivity curve, full-range triggers, timers) |
 | Block flag on inputs | *Block* on keyboard/mouse bindings |
 | Plugin filters | *Only while states* on the bindings; Button/Axis to Filter become *SetState* bindings. Unlike UCR, a binding switched off by a state releases its output instead of freezing it |
 | Events | mouse wheel up/down/left/right: Button to Event → wheel output (one notch per press/release), Event to Button → a pulse of the hold time |
-| Not converted (reported) | shadow devices, DS4 output, vJoy POV output |
+| Not converted (reported) | unknown third-party plugins |
 
 ## Running in the background / with Windows
 

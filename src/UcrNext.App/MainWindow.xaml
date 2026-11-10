@@ -41,6 +41,9 @@
                 <MenuItem Header="Dark" IsCheckable="True" IsChecked="{Binding ThemeDark, Mode=OneWay}" Click="ThemeDark_Click" />
             </MenuItem>
             <MenuItem Header="_Settings">
+                <MenuItem Header="Device slots and extra players…" Click="DeviceSlots_Click"
+                          ToolTip="Bindings can read a slot (&quot;P1 stick&quot;) instead of one exact controller; extra players are UCR's shadow devices" />
+                <Separator />
                 <MenuItem Header="Start mapping when UCR-Next starts" IsCheckable="True" IsChecked="{Binding StartMappingOnLaunch}" />
                 <MenuItem Header="Show tray icon" IsCheckable="True" IsChecked="{Binding ShowTrayIcon}" Click="TraySetting_Click" />
                 <MenuItem Header="Keep running in the tray when the window is closed" IsCheckable="True" IsChecked="{Binding CloseToTray}" />
@@ -225,6 +228,10 @@
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
                                 <Button HorizontalAlignment="Left" Content="Add connected device ▾" Click="AddSkipDevice_Click" />
+                                <CheckBox Margin="0,10,0,0" IsChecked="{Binding RequireDevices}"
+                                          ToolTip="The profile stays off until every controller its bindings read is connected, so no virtual pad is plugged in for a missing controller and real pads keep their Xbox slots.">
+                                    <TextBlock Text="Wait until its controllers are connected" TextWrapping="Wrap" />
+                                </CheckBox>
                             </StackPanel>
                         </Grid>
                     </Expander>

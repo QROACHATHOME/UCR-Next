@@ -68,6 +68,12 @@ public partial class MainWindow : Window
 
     private void TraySetting_Click(object sender, RoutedEventArgs e) => _app.ApplyTraySetting();
 
+    private void DeviceSlots_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new SlotsDialog(_vm.Services.Settings.DeviceSlots, _vm.Devices.ToList(), ProfileVm.DeviceName) { Owner = this };
+        if (dlg.ShowDialog() == true) _vm.ApplySlots(dlg.Result, dlg.Renames, dlg.ConvertBindings);
+    }
+
     private void AutostartOff_Click(object sender, RoutedEventArgs e) => _vm.SetAutostart(Autostart.Mode.Off);
     private void AutostartLogon_Click(object sender, RoutedEventArgs e) => _vm.SetAutostart(Autostart.Mode.Logon);
     private void AutostartElevated_Click(object sender, RoutedEventArgs e) => _vm.SetAutostart(Autostart.Mode.Elevated);
@@ -397,7 +403,7 @@ public partial class MainWindow : Window
     {
         if ((sender as FrameworkElement)?.DataContext is not BindingVm.ExtraSlot slot) return;
         var dlg = new BindDialog(_vm.Services.Inputs, _vm.InterceptionRunning, _vm.Services.Hooks.DrainDiagnostics) { Owner = this };
-        if (dlg.ShowDialog() == true && dlg.Captured is { } input) slot.Owner.SetExtra(slot.Index, input);
+        if (dlg.ShowDialog() == true && dlg.Captured is { } input) slot.Owner.SetExtra(slot.Index, _vm.UseSlot(input));
     }
 
     private void BindingSettings_Click(object sender, RoutedEventArgs e)
@@ -408,6 +414,6 @@ public partial class MainWindow : Window
     private void BindInput(BindingVm binding)
     {
         var dlg = new BindDialog(_vm.Services.Inputs, _vm.InterceptionRunning, _vm.Services.Hooks.DrainDiagnostics) { Owner = this };
-        if (dlg.ShowDialog() == true && dlg.Captured is { } input) binding.SetInput(input);
+        if (dlg.ShowDialog() == true && dlg.Captured is { } input) binding.SetInput(_vm.UseSlot(input));
     }
 }

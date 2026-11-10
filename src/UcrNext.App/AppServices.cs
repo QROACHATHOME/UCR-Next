@@ -57,6 +57,7 @@ public sealed class AppServices : IDisposable
 
         Inputs = new CompositeInputSource(providers);
         Engine = engine = new MappingEngine(Inputs, new SendInputOutput(), Pad, VJoy);
+        Engine.SetDeviceSlots(Settings.DeviceSlots);
         Hooks.Install();
         RawInput.Install();
 
@@ -77,7 +78,11 @@ public sealed class AppServices : IDisposable
         yield return "Foreground app: " + (Engine.ForegroundApp ?? "(none)");
         var skipped = Engine.SkippedProfileNames;
         if (skipped.Count > 0) yield return "Skipped (device connected): " + string.Join(", ", skipped);
-        yield return "Xbox 360 pad: " + Pad.Status;
+        var waiting = Engine.WaitingProfileNames;
+        if (waiting.Count > 0) yield return "Waiting for their controllers: " + string.Join(", ", waiting);
+        foreach (var (slot, ids) in Engine.SlotAssignments)
+            yield return $"Slot \"{slot}\": " + string.Join(", ", ids.Select((id, k) => $"{(k == 0 ? "" : $"player {k + 1} ")}{id ?? "not connected"}"));
+        yield return "Virtual pads: " + Pad.Status;
         yield return VJoy.Status;
         yield return DirectInput?.Status ?? "DirectInput unavailable (using WinMM fallback)";
         yield return Interception?.Status ?? "Interception: off (enable in Settings)";

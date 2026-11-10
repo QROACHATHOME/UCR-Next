@@ -90,17 +90,55 @@ public sealed class InputRef : IEquatable<InputRef>
     public override bool Equals(object? obj) => Equals(obj as InputRef);
     public override int GetHashCode() => HashCode.Combine(DeviceId, Kind, Index);
     public override string ToString() => string.IsNullOrEmpty(Label) ? $"{DeviceId} {Kind} {Index}" : Label;
+
+    /// <summary>DeviceId prefix of an input that reads through a <see cref="DeviceSlot"/>: "slot:Player 1 stick".</summary>
+    public const string SlotPrefix = "slot:";
+    public static string SlotId(string slotName) => SlotPrefix + slotName;
+    /// <summary>The slot name of a slot device id, or null.</summary>
+    public static string? SlotOf(string deviceId) =>
+        deviceId.StartsWith(SlotPrefix, StringComparison.Ordinal) ? deviceId[SlotPrefix.Length..] : null;
+    [JsonIgnore] public string? Slot => SlotOf(DeviceId);
+}
+
+/// <summary>
+/// A named stand-in for a physical device ("Player 1 stick"). Bindings read the slot, the slot
+/// says which device fills it, so a replaced or renumbered controller is one change here.
+/// <see cref="Shadows"/> are UCR's shadow devices: every binding that reads the slot also runs once
+/// per extra device, with its virtual pad / vJoy output moved up by one per extra device
+/// (player 2 stick → Xbox 360 #2, and so on).
+/// </summary>
+public sealed class DeviceSlot
+{
+    public string Name { get; set; } = "Slot";
+    /// <summary>The device that fills the slot (matched by id, or by name if the id changed).</summary>
+    public DeviceMatch Device { get; set; } = new();
+    /// <summary>Extra devices: players 2, 3, … (UCR shadow devices).</summary>
+    public List<DeviceMatch> Shadows { get; set; } = new();
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum OutputTarget { Keyboard, Mouse, Xbox360, VJoy }
+public enum OutputTarget { Keyboard, Mouse, Xbox360, VJoy, DualShock4 }
 
 /// <summary>Axes of a vJoy device. Order matters (used as index).</summary>
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum VJoyAxis { X, Y, Z, RX, RY, RZ, Slider0, Slider1 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum OutputKind { Button, Axis }
+public enum OutputKind
+{
+    Button,
+    Axis,
+    /// <summary>vJoy POV hat direction: Index = (hat - 1) × 4 + direction (0 up, 1 right, 2 down, 3 left).</summary>
+    Pov,
+}
+
+/// <summary>Buttons of the virtual DualShock 4. Order matters (used as index).</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum Ds4Button
+{
+    Cross, Circle, Square, Triangle, L1, R1, L2, R2, Share, Options, PS, L3, R3, Touchpad,
+    DPadUp, DPadDown, DPadLeft, DPadRight,
+}
 
 /// <summary>Buttons of the virtual Xbox 360 pad. Order matters (used as index).</summary>
 [JsonConverter(typeof(JsonStringEnumConverter))]
@@ -136,14 +174,16 @@ public enum MouseAxis
 /// Identifies one output control. Index meaning depends on Target/Kind:
 /// Keyboard/Button = Win32 virtual-key code; Mouse/Button = <see cref="MouseButton"/>;
 /// Mouse/Axis = <see cref="MouseAxis"/>; Xbox360/Button = <see cref="XboxButton"/>;
-/// Xbox360/Axis = <see cref="XboxAxis"/>; VJoy/Button = button number - 1; VJoy/Axis = <see cref="VJoyAxis"/>.
+/// Xbox360/Axis = <see cref="XboxAxis"/>; VJoy/Button = button number - 1; VJoy/Axis = <see cref="VJoyAxis"/>;
+/// VJoy/Pov = (hat - 1) × 4 + direction; DualShock4/Button = <see cref="Ds4Button"/>;
+/// DualShock4/Axis = <see cref="XboxAxis"/> (sticks, then L2 / R2 analog).
 /// </summary>
 public sealed class OutputRef : IEquatable<OutputRef>
 {
     public OutputTarget Target { get; set; }
     public OutputKind Kind { get; set; }
     public int Index { get; set; }
-    /// <summary>vJoy device number (1-16), or virtual Xbox 360 pad number 0-3 (P1-P4). 0 for other targets.</summary>
+    /// <summary>vJoy device number (1-16), or virtual Xbox 360 / DualShock 4 pad number 0-3 (#1-#4). 0 for other targets.</summary>
     public int Device { get; set; }
 
     public const int MaxXboxPads = 4;
@@ -162,9 +202,20 @@ public sealed class OutputRef : IEquatable<OutputRef>
     public static OutputRef Xbox(XboxAxis a, int pad = 0) => new(OutputTarget.Xbox360, OutputKind.Axis, (int)a, pad);
     public static OutputRef Mouse(MouseButton b) => new(OutputTarget.Mouse, OutputKind.Button, (int)b);
     public static OutputRef Mouse(MouseAxis a) => new(OutputTarget.Mouse, OutputKind.Axis, (int)a);
+    public static OutputRef Ds4(Ds4Button b, int pad = 0) => new(OutputTarget.DualShock4, OutputKind.Button, (int)b, pad);
+    public static OutputRef Ds4(XboxAxis a, int pad = 0) => new(OutputTarget.DualShock4, OutputKind.Axis, (int)a, pad);
+    /// <summary>vJoy POV hat <paramref name="hat"/> (1-4), direction 0 up, 1 right, 2 down, 3 left.</summary>
+    public static OutputRef VJoyPov(int device, int hat, int direction) =>
+        new(OutputTarget.VJoy, OutputKind.Pov, (hat - 1) * 4 + direction, device);
+
+    public const int MaxPovHats = 4;
+
+    /// <summary>A virtual pad output (Xbox 360 or DualShock 4).</summary>
+    [JsonIgnore]
+    public bool IsPad => Target is OutputTarget.Xbox360 or OutputTarget.DualShock4;
 
     [JsonIgnore]
-    public bool IsTrigger => Target == OutputTarget.Xbox360 && Kind == OutputKind.Axis &&
+    public bool IsTrigger => IsPad && Kind == OutputKind.Axis &&
                              (Index == (int)XboxAxis.LeftTrigger || Index == (int)XboxAxis.RightTrigger);
 
     public bool Equals(OutputRef? o) =>
@@ -366,6 +417,11 @@ public sealed class Profile
     /// "pad as wheel" profile when the real wheel is plugged in), so no virtual controller is created for it.
     /// </summary>
     public List<DeviceMatch> SkipIfDevicesPresent { get; set; } = new();
+    /// <summary>
+    /// The profile waits until every device its bindings read is connected, so its virtual pads
+    /// are never plugged in for a missing controller (and real pads keep their XInput slots).
+    /// </summary>
+    public bool RequireDevices { get; set; }
     /// <summary>Free-form list of games that use this profile (shown in the UI, used by "ucrnext game").</summary>
     public List<string> Games { get; set; } = new();
     public List<Binding> Bindings { get; set; } = new();

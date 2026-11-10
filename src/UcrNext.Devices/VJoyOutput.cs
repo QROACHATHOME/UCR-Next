@@ -47,7 +47,9 @@ public sealed class VJoyOutput : IVJoyOutput, IDisposable
                     dev.AxisMax[a] = GetVJDAxisMax(id, AxisUsage[a], ref max) && max > 0 ? max : 0x8000;
                 }
                 int buttons = Math.Clamp(GetVJDButtonNumber(id), 0, VJoyState.MaxButtons);
-                dev.Info = new VJoyDeviceInfo((int)id, axes, buttons);
+                int cont = Math.Clamp(GetVJDContPovNumber(id), 0, OutputRef.MaxPovHats);
+                int disc = Math.Clamp(GetVJDDiscPovNumber(id), 0, OutputRef.MaxPovHats);
+                dev.Info = new VJoyDeviceInfo((int)id, axes, buttons, cont > 0 ? cont : disc, cont > 0 || disc == 0);
                 _devs[(int)id] = dev;
             }
             Devices = _devs.Values.Select(d => d.Info).ToList();
@@ -97,6 +99,12 @@ public sealed class VJoyOutput : IVJoyOutput, IDisposable
                 if (last is not null && last.Buttons[b] == state.Buttons[b]) continue;
                 SetBtn(state.Buttons[b], (uint)device, (byte)(b + 1));
             }
+            for (int h = 1; h <= d.Info.Povs; h++)
+            {
+                int angle = state.PovAngle(h);
+                if (last is not null && last.PovAngle(h) == angle) continue;
+                SetPov(d, device, h, angle);
+            }
             d.Last = state.Clone();
         }
     }
@@ -111,11 +119,26 @@ public sealed class VJoyOutput : IVJoyOutput, IDisposable
                 // Centre axes and release buttons before letting go.
                 foreach (var a in d.Info.Axes) SetAxis(d.AxisMax[(int)a] / 2, (uint)device, AxisUsage[(int)a]);
                 for (int b = 0; b < d.Info.Buttons; b++) SetBtn(false, (uint)device, (byte)(b + 1));
+                for (int h = 1; h <= d.Info.Povs; h++) SetPov(d, device, h, -1);
                 RelinquishVJD((uint)device);
             }
             catch { /* driver gone */ }
             d.Acquired = false;
             d.Last = null;
+        }
+    }
+
+    /// <summary>
+    /// Continuous hats take hundredths of a degree (-1 = centred). 4-direction hats take 0-3
+    /// (up, right, down, left); a diagonal shows its up/down part.
+    /// </summary>
+    private static void SetPov(Dev d, int device, int hat, int angle)
+    {
+        if (d.Info.ContinuousPovs) SetContPov(angle < 0 ? -1 : angle * 100, (uint)device, (byte)hat);
+        else
+        {
+            int dir = angle switch { < 0 => -1, 0 or 45 or 315 => 0, 90 => 1, 135 or 180 or 225 => 2, _ => 3 };
+            SetDiscPov(dir, (uint)device, (byte)hat);
         }
     }
 
@@ -136,4 +159,8 @@ public sealed class VJoyOutput : IVJoyOutput, IDisposable
     [DllImport(Dll)] private static extern int GetVJDButtonNumber(uint rID);
     [DllImport(Dll)] private static extern bool SetAxis(int value, uint rID, uint axis);
     [DllImport(Dll)] private static extern bool SetBtn(bool value, uint rID, byte nBtn);
+    [DllImport(Dll)] private static extern int GetVJDContPovNumber(uint rID);
+    [DllImport(Dll)] private static extern int GetVJDDiscPovNumber(uint rID);
+    [DllImport(Dll)] private static extern bool SetContPov(int value, uint rID, byte nPov);
+    [DllImport(Dll)] private static extern bool SetDiscPov(int value, uint rID, byte nPov);
 }

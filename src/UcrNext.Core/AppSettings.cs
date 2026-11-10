@@ -19,6 +19,8 @@ public sealed class AppSettings
     public string Theme { get; set; } = "System";
     /// <summary>Your own name, notes and picture per device, by device id.</summary>
     public Dictionary<string, DeviceCustomization> Devices { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Device slots ("P1 stick" → which controller); bindings can read a slot instead of one exact device.</summary>
+    public List<DeviceSlot> DeviceSlots { get; set; } = new();
     /// <summary>Also list devices marked hidden.</summary>
     public bool ShowHiddenDevices { get; set; }
 
@@ -39,6 +41,7 @@ public sealed class AppSettings
             {
                 var s = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(path), Options) ?? new();
                 s.Devices = new Dictionary<string, DeviceCustomization>(s.Devices ?? new(), StringComparer.OrdinalIgnoreCase);
+                s.DeviceSlots ??= new();
                 return s;
             }
         }

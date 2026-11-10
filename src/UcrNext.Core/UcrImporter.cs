@@ -35,6 +35,14 @@ public sealed class UcrImporter
         XboxButton.LeftThumb, XboxButton.RightThumb, XboxButton.Back, XboxButton.Start,
     };
     private static readonly XboxButton[] VigemPov = { XboxButton.DPadUp, XboxButton.DPadRight, XboxButton.DPadDown, XboxButton.DPadLeft };
+    // UCR (IOWrapper) DualShock 4 button order.
+    private static readonly Ds4Button[] Ds4Buttons =
+    {
+        Ds4Button.Cross, Ds4Button.Circle, Ds4Button.Square, Ds4Button.Triangle, Ds4Button.L1, Ds4Button.R1,
+        Ds4Button.L3, Ds4Button.R3, Ds4Button.Share, Ds4Button.Options, Ds4Button.L2, Ds4Button.R2,
+        Ds4Button.PS, Ds4Button.Touchpad,
+    };
+    private static readonly Ds4Button[] Ds4Pov = { Ds4Button.DPadUp, Ds4Button.DPadRight, Ds4Button.DPadDown, Ds4Button.DPadLeft };
     private static readonly string[] MouseNames = { "Left", "Right", "Middle", "X1", "X2" };
     private static readonly string[] WheelNames = { "Wheel Up", "Wheel Down", "Wheel Right", "Wheel Left" };
 
@@ -82,7 +90,12 @@ public sealed class UcrImporter
         return result;
     }
 
-    private sealed record UcrDevice(string Title, string Provider, string Handle, int Number);
+    private sealed record UcrDevice(string Title, string Provider, string Handle, int Number)
+    {
+        /// <summary>UCR shadow devices of this configuration (players 2, 3, …).</summary>
+        public List<UcrDevice> Shadows { get; init; } = new();
+        public Guid Config { get; init; }
+    }
     private sealed record UcrMapping(string Title, XElement Element, string Owner);
     private sealed record Scope(string Name, Dictionary<Guid, UcrDevice> Inputs, Dictionary<Guid, UcrDevice> Outputs, List<UcrMapping> Mappings);
 
@@ -110,10 +123,15 @@ public sealed class UcrImporter
             Enabled = false,
         };
         var notes = new List<string>();
-        foreach (var m in mappings) ConvertMapping(m, scope, profile, notes);
+        foreach (var m in mappings) ConvertMapping(m, scope, profile, notes, result);
 
-        if (el.Descendants("ShadowDevices").Any(s => s.HasElements))
-            notes.Add("Shadow devices are not supported; only the main device of each configuration was used.");
+        foreach (var o in outputs.Values.Where(o => o.Shadows.Count > 0))
+            for (int k = 0; k < o.Shadows.Count; k++)
+            {
+                var sh = o.Shadows[k];
+                if (sh.Provider != o.Provider || !string.Equals(sh.Handle, o.Handle, StringComparison.OrdinalIgnoreCase) || sh.Number != o.Number + k + 1)
+                    notes.Add($"Output \"{o.Title}\": shadow device \"{sh.Title}\" isn't the next one in line; UCR-Next always uses the next pad / vJoy device for each extra player");
+            }
 
         result.Profiles.Add(profile);
         result.Notes.Add($"{name}: {profile.Bindings.Count} binding(s) imported" + (notes.Count == 0 ? "" : $", {notes.Count} note(s)"));
@@ -130,12 +148,41 @@ public sealed class UcrImporter
         {
             var d = dc.Element("Device");
             if (d is null || !Guid.TryParse((string?)dc.Attribute("Guid"), out var guid)) continue;
-            yield return (guid, new UcrDevice(
-                (string?)d.Attribute("Title") ?? "",
-                (string?)d.Attribute("ProviderName") ?? "",
-                (string?)d.Attribute("DeviceHandle") ?? "",
-                int.TryParse((string?)d.Attribute("DeviceNumber"), out var n) ? n : 0));
+            yield return (guid, Dev(d) with
+            {
+                Config = guid,
+                Shadows = (dc.Element("ShadowDevices")?.Elements("Device") ?? Enumerable.Empty<XElement>()).Select(Dev).ToList(),
+            });
         }
+
+        static UcrDevice Dev(XElement d) => new(
+            (string?)d.Attribute("Title") ?? "",
+            (string?)d.Attribute("ProviderName") ?? "",
+            (string?)d.Attribute("DeviceHandle") ?? "",
+            int.TryParse((string?)d.Attribute("DeviceNumber"), out var n) ? n : 0);
+    }
+
+    /// <summary>
+    /// A UCR input configuration with shadow devices becomes a device slot (main device + shadows);
+    /// its inputs then read the slot. Returns the slot's device id.
+    /// </summary>
+    private string SlotFor(UcrDevice dev, UcrBinding b, InputRef main, UcrImportResult result)
+    {
+        if (!result.SlotNames.TryGetValue(dev.Config, out var name))
+        {
+            string baseName = string.IsNullOrWhiteSpace(dev.Title) ? "Device" : dev.Title.Trim();
+            name = baseName;
+            for (int i = 2; result.Slots.Any(x => string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase)); i++) name = $"{baseName} ({i})";
+            var slot = new DeviceSlot { Name = name, Device = new DeviceMatch { DeviceId = main.DeviceId, Name = dev.Title } };
+            foreach (var sh in dev.Shadows)
+            {
+                var r = ConvertInput(sh, b, out _, out _);
+                slot.Shadows.Add(new DeviceMatch { DeviceId = r?.DeviceId ?? "", Name = sh.Title });
+            }
+            result.Slots.Add(slot);
+            result.SlotNames[dev.Config] = name;
+        }
+        return InputRef.SlotId(name);
     }
 
     private sealed record UcrBinding(bool IsBound, Guid Config, int Type, int Value, int Sub, bool Block);
@@ -146,7 +193,7 @@ public sealed class UcrImporter
         Int(b.Attribute("KeyType")?.Value), Int(b.Attribute("KeyValue")?.Value), Int(b.Attribute("KeySubValue")?.Value),
         Bool(b.Attribute("Block")?.Value));
 
-    private void ConvertMapping(UcrMapping m, Scope scope, Profile profile, List<string> notes)
+    private void ConvertMapping(UcrMapping m, Scope scope, Profile profile, List<string> notes, UcrImportResult result)
     {
         var plugins = m.Element.Element("Plugins")?.Elements().ToList() ?? new List<XElement>();
         var inputBindings = m.Element.Element("DeviceBindings")?.Elements("DeviceBinding").Select(ReadBinding).ToList() ?? new();
@@ -164,6 +211,7 @@ public sealed class UcrImporter
             }
             var r = ConvertInput(dev, b, out bool flip, out string? why);
             if (r is null) notes.Add($"\"{m.Title}\": input skipped — {why}");
+            else if (dev.Shadows.Count > 0) r.DeviceId = SlotFor(dev, b, r, result);
             inputs.Add((r, flip, b.Block));
         }
 
@@ -593,9 +641,21 @@ public sealed class UcrImporter
         switch (dev.Provider)
         {
             case "Core_ViGEm":
+                if (dev.Handle.Equals("ds4", StringComparison.OrdinalIgnoreCase))
+                {
+                    int pad = Math.Clamp(dev.Number, 0, OutputRef.MaxXboxPads - 1);
+                    if (pad != dev.Number) warn = $"virtual DualShock 4 #{dev.Number + 1} doesn't exist (max {OutputRef.MaxXboxPads}); used #{pad + 1}";
+                    switch (b.Type)
+                    {
+                        case 0 when b.Value is >= 0 and < 6: return OutputRef.Ds4((XboxAxis)b.Value, pad);
+                        case 1 when b.Value is >= 0 and < 14: return OutputRef.Ds4(Ds4Buttons[b.Value], pad);
+                        case 2 when b.Value is >= 0 and < 4: return OutputRef.Ds4(Ds4Pov[b.Value], pad);
+                    }
+                    break;
+                }
                 if (!dev.Handle.Equals("xb360", StringComparison.OrdinalIgnoreCase))
                 {
-                    why = $"ViGEm \"{dev.Handle}\" (e.g. DualShock 4) output is not supported; only Xbox 360";
+                    why = $"ViGEm \"{dev.Handle}\" output is not supported; only Xbox 360 and DualShock 4";
                     return null;
                 }
             {
@@ -621,7 +681,8 @@ public sealed class UcrImporter
                 {
                     case 0 when b.Value is >= 0 and < 8: return OutputRef.VJoy(device, (VJoyAxis)b.Value);
                     case 1 when b.Value is >= 0 and < VJoyState.MaxButtons: return OutputRef.VJoyButton(device, b.Value + 1);
-                    case 2: why = "vJoy POV hat output is not supported yet"; return null;
+                    case 2 when b.Value is >= 0 and < OutputRef.MaxPovHats && b.Sub is >= 0 and < 4:
+                        return OutputRef.VJoyPov(device, b.Value + 1, b.Sub);
                 }
                 break;
             }
@@ -712,6 +773,9 @@ public sealed class UcrImporter
 public sealed class UcrImportResult
 {
     public List<Profile> Profiles { get; } = new();
+    /// <summary>Device slots made from UCR shadow devices (add them to the app's slots).</summary>
+    public List<DeviceSlot> Slots { get; } = new();
+    internal Dictionary<Guid, string> SlotNames { get; } = new();
     /// <summary>Human-readable report: one line per profile, then indented notes about what was approximated or skipped.</summary>
     public List<string> Notes { get; } = new();
     public string Report => string.Join(Environment.NewLine, Notes);
@@ -731,6 +795,7 @@ public sealed class UcrImportResult
                 p.Applications = old.Applications;
                 p.Games = old.Games;
                 p.SkipIfDevicesPresent = old.SkipIfDevicesPresent;
+                p.RequireDevices = old.RequireDevices;
                 // Keep the user's groups: a re-imported binding with the same name and input stays in its group.
                 p.Groups = old.Groups;
                 foreach (var b in p.Bindings)

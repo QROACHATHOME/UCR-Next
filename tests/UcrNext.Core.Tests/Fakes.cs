@@ -8,7 +8,7 @@ internal sealed class FakeInput : IInputSource
 
     public bool TryRead(InputRef input, out double value)
     {
-        if (input.DeviceId != "fake") { value = 0; return false; }
+        if (!input.DeviceId.StartsWith("fake")) { value = 0; return false; }
         value = Values.TryGetValue(input, out var v) ? v : 0;
         return true;
     }
@@ -41,6 +41,14 @@ internal sealed class FakePad : IVirtualPadOutput
         Log.Add("update " + pad);
     }
     public void Disconnect(int pad) { Disconnects++; Log.Add("disconnect " + pad); }
+    public Dictionary<int, PadState> Ds4Last { get; } = new();
+    public void UpdateDs4(int pad, PadState state)
+    {
+        var c = PadState.Like(state); c.CopyFrom(state);
+        Ds4Last[pad] = c;
+        Log.Add("ds4 update " + pad);
+    }
+    public void DisconnectDs4(int pad) { Ds4Last.Remove(pad); Log.Add("ds4 disconnect " + pad); }
 }
 
 internal sealed class FakeDelta : IInputSource, IDeltaSource
@@ -50,7 +58,7 @@ internal sealed class FakeDelta : IInputSource, IDeltaSource
 
     public bool TryRead(InputRef input, out double value)
     {
-        if (input.DeviceId != "fake") { value = 0; return false; }
+        if (!input.DeviceId.StartsWith("fake")) { value = 0; return false; }
         value = Values.TryGetValue(input, out var v) ? v : 0;
         return true;
     }
@@ -58,6 +66,6 @@ internal sealed class FakeDelta : IInputSource, IDeltaSource
     public bool TryReadDelta(InputRef input, out double sum, out int events)
     {
         (sum, events) = Deltas.TryGetValue(input, out var d) ? d : (0, 0);
-        return input.DeviceId == "fake";
+        return input.DeviceId.StartsWith("fake");
     }
 }

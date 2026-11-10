@@ -31,10 +31,16 @@ public interface IKeyboardMouseOutput
     void MouseWheel(int delta, bool horizontal);
 }
 
-/// <summary>Full state of a virtual Xbox 360 pad.</summary>
+/// <summary>Full state of a virtual Xbox 360 pad (or, with <see cref="ForDs4"/>, a DualShock 4).</summary>
 public sealed class PadState : IEquatable<PadState>
 {
-    public bool[] Buttons { get; } = new bool[Enum.GetValues<XboxButton>().Length];
+    public PadState() : this(Enum.GetValues<XboxButton>().Length) { }
+    private PadState(int buttons) { Buttons = new bool[buttons]; }
+    public static PadState ForDs4() => new(Enum.GetValues<Ds4Button>().Length);
+    public static PadState Like(PadState o) => new(o.Buttons.Length);
+
+    public bool[] Buttons { get; }
+    /// <summary>Per <see cref="XboxAxis"/>: sticks -1..1 (up = positive), triggers 0..1.</summary>
     public double[] Axes { get; } = new double[Enum.GetValues<XboxAxis>().Length];
 
     public bool Equals(PadState? o) => o is not null && Buttons.SequenceEqual(o.Buttons) && Axes.SequenceEqual(o.Axes);
@@ -49,7 +55,9 @@ public sealed class PadState : IEquatable<PadState>
 }
 
 /// <summary>A configured vJoy device and the controls it has.</summary>
-public sealed record VJoyDeviceInfo(int Id, IReadOnlyList<VJoyAxis> Axes, int Buttons);
+/// <param name="Povs">Number of POV hats (0-4).</param>
+/// <param name="ContinuousPovs">True = continuous hats (diagonals possible), false = 4-direction hats.</param>
+public sealed record VJoyDeviceInfo(int Id, IReadOnlyList<VJoyAxis> Axes, int Buttons, int Povs = 0, bool ContinuousPovs = true);
 
 /// <summary>Full state of one vJoy device.</summary>
 public sealed class VJoyState : IEquatable<VJoyState>
@@ -58,8 +66,26 @@ public sealed class VJoyState : IEquatable<VJoyState>
     public bool[] Buttons { get; } = new bool[MaxButtons];
     /// <summary>-1..1 per <see cref="VJoyAxis"/>; 0 = centre.</summary>
     public double[] Axes { get; } = new double[Enum.GetValues<VJoyAxis>().Length];
+    /// <summary>Pressed POV directions: (hat - 1) × 4 + direction (0 up, 1 right, 2 down, 3 left).</summary>
+    public bool[] Pov { get; } = new bool[OutputRef.MaxPovHats * 4];
 
-    public bool Equals(VJoyState? o) => o is not null && Buttons.SequenceEqual(o.Buttons) && Axes.SequenceEqual(o.Axes);
+    /// <summary>
+    /// Hat angle in degrees (0 = up, clockwise; 45 steps for diagonals), or -1 = centred.
+    /// Opposite directions cancel out.
+    /// </summary>
+    public int PovAngle(int hat)
+    {
+        int b = (hat - 1) * 4;
+        int y = (Pov[b] ? 1 : 0) - (Pov[b + 2] ? 1 : 0), x = (Pov[b + 1] ? 1 : 0) - (Pov[b + 3] ? 1 : 0);
+        return (x, y) switch
+        {
+            (0, 1) => 0, (1, 1) => 45, (1, 0) => 90, (1, -1) => 135,
+            (0, -1) => 180, (-1, -1) => 225, (-1, 0) => 270, (-1, 1) => 315,
+            _ => -1,
+        };
+    }
+
+    public bool Equals(VJoyState? o) => o is not null && Buttons.SequenceEqual(o.Buttons) && Axes.SequenceEqual(o.Axes) && Pov.SequenceEqual(o.Pov);
     public override bool Equals(object? obj) => Equals(obj as VJoyState);
     public override int GetHashCode() => 0;
     public VJoyState Clone()
@@ -67,6 +93,7 @@ public sealed class VJoyState : IEquatable<VJoyState>
         var c = new VJoyState();
         Array.Copy(Buttons, c.Buttons, Buttons.Length);
         Array.Copy(Axes, c.Axes, Axes.Length);
+        Array.Copy(Pov, c.Pov, Pov.Length);
         return c;
     }
 }
@@ -92,6 +119,10 @@ public interface IVirtualPadOutput
     void Update(int pad, PadState state);
     /// <summary>Unplugs virtual pad <paramref name="pad"/>.</summary>
     void Disconnect(int pad);
+    /// <summary>Plugs in virtual DualShock 4 <paramref name="pad"/> (0-3) if needed and sends the full state.</summary>
+    void UpdateDs4(int pad, PadState state) { }
+    /// <summary>Unplugs virtual DualShock 4 <paramref name="pad"/>.</summary>
+    void DisconnectDs4(int pad) { }
 }
 
 /// <summary>

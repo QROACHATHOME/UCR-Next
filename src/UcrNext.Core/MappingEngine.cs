@@ -19,7 +19,7 @@ public sealed class MappingEngine
     public const double WheelNotchesPerTick = 0.08;
     public const int WheelNotch = 120;
 
-    private sealed record CompiledProfile(string Name, string[] Apps, DeviceMatch[] Skip, Binding[] Bindings)
+    private sealed record CompiledProfile(string Name, string[] Apps, DeviceMatch[] Skip, Binding[] Bindings, bool RequireDevices)
     {
         /// <summary>Named states (UCR filters) of this profile; set by SetState bindings.</summary>
         public Dictionary<string, bool> States { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -75,6 +75,12 @@ public sealed class MappingEngine
     private double _wheelRem, _hwheelRem;
     private readonly Dictionary<int, PadState> _lastPads = new();
     private int _padsNeeded; // pads 0.._padsNeeded-1 are plugged in (keeps P1..P4 numbering stable)
+    private readonly Dictionary<int, PadState> _lastDs4 = new();
+    private int _ds4Needed;
+    private DeviceSlot[] _slots = Array.Empty<DeviceSlot>();
+    /// <summary>Bindings with their slot inputs filled in, per (binding, shadow number, devices used).</summary>
+    private readonly Dictionary<(Binding, int, string), Binding> _resolved = new();
+    private string[] _waitingNames = Array.Empty<string>();
     private readonly Dictionary<int, VJoyState> _lastVJoy = new();
     private double _mouseRemX, _mouseRemY;
     private bool _active = true;
@@ -105,6 +111,32 @@ public sealed class MappingEngine
     /// <summary>Profiles that apply to the foreground app but are skipped because a listed device is connected.</summary>
     public IReadOnlyList<string> SkippedProfileNames { get { lock (_gate) return _skippedNames; } }
 
+    /// <summary>Profiles that apply but wait for a device (see <see cref="Profile.RequireDevices"/>).</summary>
+    public IReadOnlyList<string> WaitingProfileNames { get { lock (_gate) return _waitingNames; } }
+
+    /// <summary>Which device fills each slot right now: slot name → device id per player (null = not connected).</summary>
+    public IReadOnlyDictionary<string, string?[]> SlotAssignments
+    {
+        get { lock (_gate) return ResolveSlots(_connected); }
+    }
+
+    /// <summary>Replaces the device slots (a copy is kept).</summary>
+    public void SetDeviceSlots(IEnumerable<DeviceSlot> slots)
+    {
+        var copy = slots.Select(sl => new DeviceSlot
+        {
+            Name = sl.Name.Trim(),
+            Device = new DeviceMatch { DeviceId = sl.Device.DeviceId, Name = sl.Device.Name },
+            Shadows = sl.Shadows.Select(m => new DeviceMatch { DeviceId = m.DeviceId, Name = m.Name }).ToList(),
+        }).Where(sl => sl.Name.Length > 0).ToArray();
+        lock (_gate)
+        {
+            _slots = copy;
+            _profilesChanged = true;
+            RefreshActive();
+        }
+    }
+
     /// <summary>
     /// True if a physical input must not reach other programs right now. Thread-safe and
     /// lock-free: called from input hook callbacks.
@@ -133,13 +165,15 @@ public sealed class MappingEngine
                 p.Name,
                 p.Applications.Where(a => !string.IsNullOrWhiteSpace(a)).Select(Profile.NormalizeExe).ToArray(),
                 p.SkipIfDevicesPresent.Select(m => new DeviceMatch { DeviceId = m.DeviceId, Name = m.Name }).ToArray(),
-                p.Bindings.Where(b => b.Enabled && b.IsComplete).Select(Clone).ToArray()))
+                p.Bindings.Where(b => b.Enabled && b.IsComplete).Select(Clone).ToArray(),
+                p.RequireDevices))
             .ToArray();
         lock (_gate)
         {
             _profiles = copy;
             _profilesChanged = true;
             _states.Clear();
+            _resolved.Clear();
             RefreshActive();
         }
     }
@@ -170,6 +204,7 @@ public sealed class MappingEngine
             var keys = new HashSet<int>();
             var mouse = new HashSet<MouseButton>();
             var pads = new Dictionary<int, PadState>();
+            var ds4 = new Dictionary<int, PadState>();
             var vjoy = new Dictionary<int, VJoyState>();
             var wheelButtons = new HashSet<MouseButton>();
             double mx = 0, my = 0, px = 0, py = 0, wheel = 0, hwheel = 0;
@@ -186,11 +221,15 @@ public sealed class MappingEngine
                 if (!Evaluate(b, now, out bool pressed, out double v)) continue;
                 var o = b.Output!;
 
-                if (o.Kind == OutputKind.Button)
+                if (o.Kind is OutputKind.Button or OutputKind.Pov)
                 {
                     if (!pressed) continue;
                     switch (o.Target)
                     {
+                        case OutputTarget.VJoy when o.Kind == OutputKind.Pov:
+                            if (o.Index is >= 0 and < OutputRef.MaxPovHats * 4) VJoyFor(vjoy, o.Device).Pov[o.Index] = true;
+                            break;
+                        case OutputTarget.DualShock4 when o.Index is >= 0 and < 18: PadFor(ds4, o.Device, true).Buttons[o.Index] = true; break;
                         case OutputTarget.Keyboard: keys.Add(o.Index); break;
                         case OutputTarget.Mouse when o.Index >= (int)MouseButton.WheelUp: wheelButtons.Add((MouseButton)o.Index); break;
                         case OutputTarget.Mouse: mouse.Add((MouseButton)o.Index); break;
@@ -212,9 +251,9 @@ public sealed class MappingEngine
                     }
                     switch (o.Target)
                     {
-                        case OutputTarget.Xbox360:
+                        case OutputTarget.Xbox360 or OutputTarget.DualShock4:
                             // Several bindings on one axis: the strongest deflection wins.
-                            var ps = PadFor(pads, o.Device);
+                            var ps = o.Target == OutputTarget.Xbox360 ? PadFor(pads, o.Device) : PadFor(ds4, o.Device, true);
                             if (Math.Abs(v) > Math.Abs(ps.Axes[o.Index])) ps.Axes[o.Index] = v;
                             break;
                         case OutputTarget.VJoy:
@@ -239,13 +278,15 @@ public sealed class MappingEngine
                 if (touched is not null && touched.Contains(b.Output)) continue;
                 double dv = Math.Clamp(b.Settings.DefaultValue, b.Output.IsTrigger ? 0 : -1, 1);
                 if (b.Output.Target == OutputTarget.Xbox360) PadFor(pads, b.Output.Device).Axes[b.Output.Index] = dv;
+                else if (b.Output.Target == OutputTarget.DualShock4) PadFor(ds4, b.Output.Device, true).Axes[b.Output.Index] = dv;
                 else if (b.Output.Target == OutputTarget.VJoy) VJoyFor(vjoy, b.Output.Device).Axes[b.Output.Index] = dv;
             }
 
             ApplyKeys(keys);
             ApplyMouse(mouse, mx, my, px, py);
             ApplyWheel(wheelButtons, wheel, hwheel);
-            ApplyPads(pads);
+            ApplyPads(pads, _lastPads, _padsNeeded, false);
+            ApplyPads(ds4, _lastDs4, _ds4Needed, true);
             ApplyVJoy(vjoy);
         }
     }
@@ -630,6 +671,13 @@ public sealed class MappingEngine
                     _pad.Disconnect(pad);
                 }
             _lastPads.Clear();
+            if (_pad is not null)
+                foreach (var pad in _lastDs4.Keys.OrderByDescending(p => p))
+                {
+                    _pad.UpdateDs4(pad, PadState.ForDs4());
+                    _pad.DisconnectDs4(pad);
+                }
+            _lastDs4.Clear();
             foreach (var id in _lastVJoy.Keys) _vjoy?.Release(id);
             _lastVJoy.Clear();
             _mouseRemX = _mouseRemY = 0;
@@ -648,21 +696,36 @@ public sealed class MappingEngine
         _lastDevices = devices;
         var forApp = Enumerable.Range(0, _profiles.Length).Where(i => Profile.AppliesTo(_profiles[i].Apps, fg)).ToArray();
         var skipped = forApp.Where(i => Profile.SkippedByDevices(_profiles[i].Skip, devices)).ToArray();
-        var activeIdx = forApp.Except(skipped).ToArray();
+        var slots = ResolveSlots(devices);
+        var present = devices.Select(d => d.DeviceId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        // Slot inputs filled in, plus one copy per connected shadow device.
+        var expanded = new Dictionary<int, List<Binding>>();
+        foreach (int i in forApp.Except(skipped))
+            expanded[i] = _profiles[i].Bindings.SelectMany(b => Expand(b, slots)).ToList();
+        var waiting = expanded.Keys.Where(i => _profiles[i].RequireDevices &&
+            !expanded[i].All(b => InputsOf(b).All(r => IsPresent(r.DeviceId, present)))).ToArray();
+        var activeIdx = expanded.Keys.Except(waiting).OrderBy(i => i).ToArray();
         var active = activeIdx.Select(i => _profiles[i]).ToArray();
-        string key = string.Join(",", activeIdx) + "|" + string.Join(",", skipped);
+        string key = string.Join(",", activeIdx) + "|" + string.Join(",", skipped) + "|" + string.Join(",", waiting) + "|" +
+                     string.Join(";", slots.Select(kv => kv.Key + "=" + string.Join(",", kv.Value)));
         if (!_profilesChanged && key == _activeKey) return;
         _profilesChanged = false;
         _activeKey = key;
 
-        _bindings = active.SelectMany(p => p.Bindings).ToArray();
-        _owners = active.SelectMany(p => p.Bindings.Select(_ => p)).ToArray();
+        _bindings = activeIdx.SelectMany(i => expanded[i]).ToArray();
+        _owners = activeIdx.SelectMany(i => expanded[i].Select(_ => _profiles[i])).ToArray();
+        _waitingNames = waiting.Select(i => _profiles[i].Name).ToArray();
         _defaultOutputs = _bindings.Where(b => b.Mode == BindingMode.DefaultValue).Select(b => b.Output!).ToHashSet();
         _activeNames = active.Select(p => p.Name).ToArray();
         _skippedNames = skipped.Select(i => _profiles[i].Name).ToArray();
-        var padIndexes = _bindings.Where(b => b.Output?.Target == OutputTarget.Xbox360)
-            .Select(b => Math.Clamp(b.Output!.Device, 0, OutputRef.MaxXboxPads - 1)).ToList();
-        _padsNeeded = padIndexes.Count == 0 ? 0 : padIndexes.Max() + 1;
+        int Needed(OutputTarget t)
+        {
+            var idx = _bindings.Where(b => b.Output?.Target == t).Select(b => Math.Clamp(b.Output!.Device, 0, OutputRef.MaxXboxPads - 1)).ToList();
+            return idx.Count == 0 ? 0 : idx.Max() + 1;
+        }
+        _padsNeeded = Needed(OutputTarget.Xbox360);
+        _ds4Needed = Needed(OutputTarget.DualShock4);
         var blocks = _bindings.Where(b => b.Block && b.Input is not null).Select(b => b.Input!).ToHashSet();
         _blockCandidates = blocks.Count == 0 ? NoBlocks : blocks;
         _blocked = _active ? _blockCandidates : NoBlocks;
@@ -674,11 +737,94 @@ public sealed class MappingEngine
         return s;
     }
 
-    private static PadState PadFor(Dictionary<int, PadState> map, int pad)
+    private static PadState PadFor(Dictionary<int, PadState> map, int pad, bool ds4 = false)
     {
         pad = Math.Clamp(pad, 0, OutputRef.MaxXboxPads - 1);
-        if (!map.TryGetValue(pad, out var s)) map[pad] = s = new PadState();
+        if (!map.TryGetValue(pad, out var s)) map[pad] = s = ds4 ? PadState.ForDs4() : new PadState();
         return s;
+    }
+
+    // ------------------------------------------------------------------ device slots
+
+    private static IEnumerable<InputRef> InputsOf(Binding b)
+    {
+        if (b.Input is not null) yield return b.Input;
+        foreach (var r in b.ExtraInputs) if (r is not null) yield return r;
+    }
+
+    /// <summary>"Any keyboard" / "any mouse" (the hooks) are always there.</summary>
+    private static bool AlwaysPresent(string deviceId) => deviceId is "keyboard" or "mouse";
+
+    private static bool IsPresent(string deviceId, HashSet<string> present) =>
+        AlwaysPresent(deviceId) || present.Contains(deviceId);
+
+    /// <summary>
+    /// Slot name → device id per player (index 0 = the slot's device, 1.. = shadow devices); null
+    /// where that device isn't connected. A device is matched by id first, then by name (so a
+    /// controller that got a new number is still found), and is never used twice in one slot.
+    /// </summary>
+    private Dictionary<string, string?[]> ResolveSlots(IReadOnlyCollection<DeviceInfo> devices)
+    {
+        var map = new Dictionary<string, string?[]>(StringComparer.OrdinalIgnoreCase);
+        foreach (var slot in _slots)
+        {
+            if (map.ContainsKey(slot.Name)) continue;
+            var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            string? Find(DeviceMatch m)
+            {
+                var d = devices.FirstOrDefault(x => m.DeviceId.Length > 0 && string.Equals(x.DeviceId, m.DeviceId, StringComparison.OrdinalIgnoreCase) && !used.Contains(x.DeviceId))
+                     ?? devices.FirstOrDefault(x => m.Name.Length > 0 && string.Equals(x.Name, m.Name, StringComparison.OrdinalIgnoreCase) && !used.Contains(x.DeviceId)
+                                                    && !_slots.Any(o => string.Equals(o.Device.DeviceId, x.DeviceId, StringComparison.OrdinalIgnoreCase)
+                                                                     || o.Shadows.Any(sh => string.Equals(sh.DeviceId, x.DeviceId, StringComparison.OrdinalIgnoreCase))));
+                if (d is null && AlwaysPresent(m.DeviceId)) return m.DeviceId;
+                if (d is not null) used.Add(d.DeviceId);
+                return d?.DeviceId;
+            }
+            var ids = new string?[1 + slot.Shadows.Count];
+            ids[0] = Find(slot.Device);
+            for (int k = 0; k < slot.Shadows.Count; k++) ids[k + 1] = Find(slot.Shadows[k]);
+            map[slot.Name] = ids;
+        }
+        return map;
+    }
+
+    /// <summary>
+    /// A binding with its slot inputs filled in, plus a copy per shadow device of its slots
+    /// (only for shadow devices that are connected). Copy k drives virtual pad / vJoy device + k
+    /// and uses states named "name#k+1", like UCR's shadow mappings.
+    /// </summary>
+    private IEnumerable<Binding> Expand(Binding b, Dictionary<string, string?[]> slots)
+    {
+        var used = InputsOf(b).Select(r => r.Slot).Where(n => n is not null).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (used.Count == 0) { yield return b; yield break; }
+
+        int players = used.Max(n => slots.TryGetValue(n!, out var ids) ? ids.Length : 1);
+        for (int k = 0; k < players; k++)
+        {
+            var ids = used.Select(n => slots.TryGetValue(n!, out var a) && k < a.Length ? a[k] : null).ToList();
+            if (k > 0 && ids.Any(id => id is null)) continue; // a shadow copy only runs with its devices
+            if (k > 0 && b.Output is { } o && (o.IsPad ? o.Device + k >= OutputRef.MaxXboxPads : o.Target == OutputTarget.VJoy && o.Device + k > 16)) continue;
+            var cacheKey = (b, k, string.Join("\n", ids));
+            if (!_resolved.TryGetValue(cacheKey, out var copy))
+            {
+                copy = Clone(b);
+                foreach (var r in InputsOf(copy))
+                    if (r.Slot is { } n)
+                    {
+                        string? id = slots.TryGetValue(n, out var a) && k < a.Length ? a[k] : null;
+                        if (id is not null) r.DeviceId = id; // else stays "slot:…" and reads nothing
+                    }
+                if (k > 0)
+                {
+                    copy.Name += $" (player {k + 1})";
+                    if (copy.Output is { } co && (co.IsPad || co.Target == OutputTarget.VJoy)) co.Device += k;
+                    if (copy.Settings.StateName.Length > 0) copy.Settings.StateName += "#" + (k + 1);
+                    foreach (var c in copy.Conditions) c.Name += "#" + (k + 1);
+                }
+                _resolved[cacheKey] = copy;
+            }
+            yield return copy;
+        }
     }
 
     private void ApplyKeys(HashSet<int> want)
@@ -731,25 +877,26 @@ public sealed class MappingEngine
 
     /// <summary>
     /// Plugs in pads 0..N-1 in order (so a game always sees P1 before P2), sends changed states,
-    /// and unplugs pads no longer needed (highest first).
+    /// and unplugs pads no longer needed (highest first). Xbox 360 and DualShock 4 pads are numbered separately.
     /// </summary>
-    private void ApplyPads(Dictionary<int, PadState> want)
+    private void ApplyPads(Dictionary<int, PadState> want, Dictionary<int, PadState> lastPads, int needed, bool ds4)
     {
         if (_pad is null) return;
-        foreach (var pad in _lastPads.Keys.Where(p => p >= _padsNeeded).OrderByDescending(p => p).ToList())
+        PadState Empty() => ds4 ? PadState.ForDs4() : new PadState();
+        foreach (var pad in lastPads.Keys.Where(p => p >= needed).OrderByDescending(p => p).ToList())
         {
-            _pad.Update(pad, new PadState());
-            _pad.Disconnect(pad);
-            _lastPads.Remove(pad);
+            if (ds4) { _pad.UpdateDs4(pad, Empty()); _pad.DisconnectDs4(pad); }
+            else { _pad.Update(pad, Empty()); _pad.Disconnect(pad); }
+            lastPads.Remove(pad);
         }
-        for (int pad = 0; pad < _padsNeeded; pad++)
+        for (int pad = 0; pad < needed; pad++)
         {
-            var state = want.TryGetValue(pad, out var s) ? s : new PadState();
-            if (_lastPads.TryGetValue(pad, out var last) && last.Equals(state)) continue;
-            _pad.Update(pad, state);
-            var copy = new PadState();
+            var state = want.TryGetValue(pad, out var s) ? s : Empty();
+            if (lastPads.TryGetValue(pad, out var last) && last.Equals(state)) continue;
+            if (ds4) _pad.UpdateDs4(pad, state); else _pad.Update(pad, state);
+            var copy = PadState.Like(state);
             copy.CopyFrom(state);
-            _lastPads[pad] = copy;
+            lastPads[pad] = copy;
         }
     }
 

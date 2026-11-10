@@ -1,11 +1,16 @@
 using Nefarius.ViGEm.Client;
 using Nefarius.ViGEm.Client.Targets;
+using Nefarius.ViGEm.Client.Targets.DualShock4;
 using Nefarius.ViGEm.Client.Targets.Xbox360;
 using UcrNext.Core;
 
 namespace UcrNext.Devices;
 
-/// <summary>Up to four virtual Xbox 360 controllers through the ViGEmBus driver, plugged in on first use.</summary>
+/// <summary>
+/// Up to four virtual Xbox 360 controllers and four DualShock 4s through the ViGEmBus driver,
+/// plugged in on first use and unplugged when no longer needed or when UCR-Next closes.
+/// (ViGEmBus also unplugs a program's pads by itself if the program crashes, so they can't be left behind.)
+/// </summary>
 public sealed class ViGEmPadOutput : IVirtualPadOutput, IDisposable
 {
     private static readonly Xbox360Button[] Buttons =
@@ -21,6 +26,17 @@ public sealed class ViGEmPadOutput : IVirtualPadOutput, IDisposable
     {
         Xbox360Axis.LeftThumbX, Xbox360Axis.LeftThumbY, Xbox360Axis.RightThumbX, Xbox360Axis.RightThumbY,
     };
+
+    private static readonly DualShock4Button[] Ds4Buttons =
+    {
+        // Order must match Core.Ds4Button (up to Touchpad; the D-pad is a hat).
+        DualShock4Button.Cross, DualShock4Button.Circle, DualShock4Button.Square, DualShock4Button.Triangle,
+        DualShock4Button.ShoulderLeft, DualShock4Button.ShoulderRight, DualShock4Button.TriggerLeft, DualShock4Button.TriggerRight,
+        DualShock4Button.Share, DualShock4Button.Options, DualShock4SpecialButton.Ps, DualShock4Button.ThumbLeft,
+        DualShock4Button.ThumbRight, DualShock4SpecialButton.Touchpad,
+    };
+
+    private readonly IDualShock4Controller?[] _ds4 = new IDualShock4Controller?[OutputRef.MaxXboxPads];
 
     private readonly object _lock = new();
     private ViGEmClient? _client;
@@ -92,7 +108,11 @@ public sealed class ViGEmPadOutput : IVirtualPadOutput, IDisposable
     {
         var parts = Enumerable.Range(0, _pads.Length).Where(i => _pads[i] is not null)
             .Select(i => _slots[i] is int s && s >= 0 ? $"P{i + 1}→slot {s + 1}" : $"P{i + 1}").ToList();
-        Status = parts.Count == 0 ? "ViGEmBus ready" : "Virtual Xbox 360 pads: " + string.Join(", ", parts);
+        var ds4 = Enumerable.Range(0, _ds4.Length).Where(i => _ds4[i] is not null).Select(i => $"#{i + 1}").ToList();
+        var text = new List<string>();
+        if (parts.Count > 0) text.Add("Virtual Xbox 360 pads: " + string.Join(", ", parts));
+        if (ds4.Count > 0) text.Add("DualShock 4: " + string.Join(", ", ds4));
+        Status = text.Count == 0 ? "ViGEmBus ready" : string.Join("; ", text);
     }
 
     public void Update(int pad, PadState state)
@@ -146,8 +166,75 @@ public sealed class ViGEmPadOutput : IVirtualPadOutput, IDisposable
         }
     }
 
+    public void UpdateDs4(int pad, PadState state)
+    {
+        if (pad < 0 || pad >= _ds4.Length) return;
+        lock (_lock)
+        {
+            if (_client is null) return;
+            var target = _ds4[pad];
+            if (target is null)
+            {
+                try
+                {
+                    target = _client.CreateDualShock4Controller();
+                    target.AutoSubmitReport = false;
+                    target.Connect();
+                    _ds4[pad] = target;
+                    UpdateStatus();
+                }
+                catch (Exception ex)
+                {
+                    Status = $"Failed to plug in virtual DualShock 4 #{pad + 1}: " + ex.Message;
+                    return;
+                }
+            }
+
+            for (int i = 0; i < Ds4Buttons.Length; i++) target.SetButtonState(Ds4Buttons[i], state.Buttons[i]);
+            int b = (int)Ds4Button.DPadUp;
+            target.SetDPadDirection(DPad(state.Buttons[b], state.Buttons[b + 1], state.Buttons[b + 2], state.Buttons[b + 3]));
+            // DualShock 4 sticks are bytes with 128 = centre and 0 = up/left.
+            target.SetAxisValue(DualShock4Axis.LeftThumbX, ToByte(state.Axes[(int)XboxAxis.LeftX]));
+            target.SetAxisValue(DualShock4Axis.LeftThumbY, ToByte(-state.Axes[(int)XboxAxis.LeftY]));
+            target.SetAxisValue(DualShock4Axis.RightThumbX, ToByte(state.Axes[(int)XboxAxis.RightX]));
+            target.SetAxisValue(DualShock4Axis.RightThumbY, ToByte(-state.Axes[(int)XboxAxis.RightY]));
+            target.SetSliderValue(DualShock4Slider.LeftTrigger, AxisProcessor.ToTrigger(state.Axes[(int)XboxAxis.LeftTrigger]));
+            target.SetSliderValue(DualShock4Slider.RightTrigger, AxisProcessor.ToTrigger(state.Axes[(int)XboxAxis.RightTrigger]));
+            target.SubmitReport();
+        }
+    }
+
+    private static byte ToByte(double v) => (byte)Math.Clamp(Math.Round((Math.Clamp(v, -1, 1) + 1) * 127.5), 0, 255);
+
+    private static DualShock4DPadDirection DPad(bool up, bool down, bool left, bool right)
+    {
+        int y = (up ? 1 : 0) - (down ? 1 : 0), x = (right ? 1 : 0) - (left ? 1 : 0);
+        return (x, y) switch
+        {
+            (0, 1) => DualShock4DPadDirection.North, (1, 1) => DualShock4DPadDirection.Northeast,
+            (1, 0) => DualShock4DPadDirection.East, (1, -1) => DualShock4DPadDirection.Southeast,
+            (0, -1) => DualShock4DPadDirection.South, (-1, -1) => DualShock4DPadDirection.Southwest,
+            (-1, 0) => DualShock4DPadDirection.West, (-1, 1) => DualShock4DPadDirection.Northwest,
+            _ => DualShock4DPadDirection.None,
+        };
+    }
+
+    public void DisconnectDs4(int pad)
+    {
+        if (pad < 0 || pad >= _ds4.Length) return;
+        lock (_lock)
+        {
+            var target = _ds4[pad];
+            if (target is null) return;
+            try { target.Disconnect(); } catch { /* already gone */ }
+            _ds4[pad] = null;
+            if (_client is not null) UpdateStatus();
+        }
+    }
+
     public void Dispose()
     {
+        for (int i = _ds4.Length - 1; i >= 0; i--) DisconnectDs4(i);
         for (int i = _pads.Length - 1; i >= 0; i--) Disconnect(i);
         _client?.Dispose();
         _client = null;
