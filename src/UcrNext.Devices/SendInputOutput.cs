@@ -43,6 +43,13 @@ public sealed class SendInputOutput : IKeyboardMouseOutput
         Send(input);
     }
 
+    public void MouseWheel(int delta, bool horizontal)
+    {
+        var input = new INPUT { type = INPUT_MOUSE };
+        input.U.mi = new MOUSEINPUT { mouseData = unchecked((uint)delta), dwFlags = horizontal ? MOUSEEVENTF_HWHEEL : MOUSEEVENTF_WHEEL };
+        Send(input);
+    }
+
     private static void Send(INPUT input)
     {
         var arr = new[] { input };
@@ -51,7 +58,7 @@ public sealed class SendInputOutput : IKeyboardMouseOutput
 
     private const uint INPUT_MOUSE = 0, INPUT_KEYBOARD = 1;
     private const uint KEYEVENTF_EXTENDEDKEY = 0x1, KEYEVENTF_KEYUP = 0x2, KEYEVENTF_SCANCODE = 0x8;
-    private const uint MOUSEEVENTF_MOVE = 0x1;
+    private const uint MOUSEEVENTF_MOVE = 0x1, MOUSEEVENTF_WHEEL = 0x0800, MOUSEEVENTF_HWHEEL = 0x1000;
     private const uint MAPVK_VK_TO_VSC_EX = 4;
 
     [StructLayout(LayoutKind.Sequential)]

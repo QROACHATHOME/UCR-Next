@@ -15,8 +15,15 @@ public sealed class MappingEngine
 {
     /// <summary>Mouse movement in pixels per tick at full deflection and sensitivity 1.</summary>
     public const double MousePixelsPerTick = 6.0;
+    /// <summary>Wheel notches per tick at full deflection (20 per second at the usual 4 ms tick).</summary>
+    public const double WheelNotchesPerTick = 0.08;
+    public const int WheelNotch = 120;
 
-    private sealed record CompiledProfile(string Name, string[] Apps, DeviceMatch[] Skip, Binding[] Bindings);
+    private sealed record CompiledProfile(string Name, string[] Apps, DeviceMatch[] Skip, Binding[] Bindings)
+    {
+        /// <summary>Named states (UCR filters) of this profile; set by SetState bindings.</summary>
+        public Dictionary<string, bool> States { get; } = new(StringComparer.OrdinalIgnoreCase);
+    }
 
     /// <summary>Runtime state for bindings whose output depends on time or history.</summary>
     private sealed class BindingState
@@ -32,6 +39,8 @@ public sealed class MappingEngine
         public double TrimX, TrimY;
         public bool TrimTaken;
         public long LastTickMs = long.MinValue;
+        public bool Toggled, Initialized, Touched;
+        public double FirstV = double.NaN;
     }
 
     private static readonly HashSet<InputRef> NoBlocks = new();
@@ -53,6 +62,8 @@ public sealed class MappingEngine
     private string _connectedKey = "";
 
     private Binding[] _bindings = Array.Empty<Binding>();
+    private CompiledProfile[] _owners = Array.Empty<CompiledProfile>(); // profile of each binding
+    private HashSet<OutputRef> _defaultOutputs = new();
     private readonly Dictionary<Binding, BindingState> _states = new(ReferenceEqualityComparer.Instance);
     private string[] _activeNames = Array.Empty<string>();
     private volatile HashSet<InputRef> _blocked = NoBlocks;
@@ -60,6 +71,8 @@ public sealed class MappingEngine
 
     private readonly HashSet<int> _keysDown = new();
     private readonly HashSet<MouseButton> _mouseDown = new();
+    private readonly HashSet<MouseButton> _wheelHeld = new();
+    private double _wheelRem, _hwheelRem;
     private readonly Dictionary<int, PadState> _lastPads = new();
     private int _padsNeeded; // pads 0.._padsNeeded-1 are plugged in (keeps P1..P4 numbering stable)
     private readonly Dictionary<int, VJoyState> _lastVJoy = new();
@@ -120,7 +133,7 @@ public sealed class MappingEngine
                 p.Name,
                 p.Applications.Where(a => !string.IsNullOrWhiteSpace(a)).Select(Profile.NormalizeExe).ToArray(),
                 p.SkipIfDevicesPresent.Select(m => new DeviceMatch { DeviceId = m.DeviceId, Name = m.Name }).ToArray(),
-                p.Bindings.Where(b => b.Enabled && b.Input is not null && b.Output is not null).Select(Clone).ToArray()))
+                p.Bindings.Where(b => b.Enabled && b.IsComplete).Select(Clone).ToArray()))
             .ToArray();
         lock (_gate)
         {
@@ -158,10 +171,18 @@ public sealed class MappingEngine
             var mouse = new HashSet<MouseButton>();
             var pads = new Dictionary<int, PadState>();
             var vjoy = new Dictionary<int, VJoyState>();
-            double mx = 0, my = 0;
+            var wheelButtons = new HashSet<MouseButton>();
+            double mx = 0, my = 0, px = 0, py = 0, wheel = 0, hwheel = 0;
+            HashSet<OutputRef>? touched = _defaultOutputs.Count > 0 ? new() : null;
 
-            foreach (var b in _bindings)
+            // States first, so the other bindings see this tick's states.
+            for (int i = 0; i < _bindings.Length; i++)
+                if (_bindings[i].Mode == BindingMode.SetState && Allowed(i)) RunStateSwitch(_bindings[i], _owners[i].States);
+
+            for (int i = 0; i < _bindings.Length; i++)
             {
+                var b = _bindings[i];
+                if (b.Mode is BindingMode.SetState or BindingMode.DefaultValue || !Allowed(i)) continue;
                 if (!Evaluate(b, now, out bool pressed, out double v)) continue;
                 var o = b.Output!;
 
@@ -171,6 +192,7 @@ public sealed class MappingEngine
                     switch (o.Target)
                     {
                         case OutputTarget.Keyboard: keys.Add(o.Index); break;
+                        case OutputTarget.Mouse when o.Index >= (int)MouseButton.WheelUp: wheelButtons.Add((MouseButton)o.Index); break;
                         case OutputTarget.Mouse: mouse.Add((MouseButton)o.Index); break;
                         case OutputTarget.Xbox360: PadFor(pads, o.Device).Buttons[o.Index] = true; break;
                         case OutputTarget.VJoy when o.Index is >= 0 and < VJoyState.MaxButtons:
@@ -180,6 +202,14 @@ public sealed class MappingEngine
                 else
                 {
                     if (o.IsTrigger) v = Math.Max(0, v);
+                    if (touched is not null && _defaultOutputs.Contains(o))
+                    {
+                        // A starting value holds until a binding on the same output moves.
+                        var st = State(b);
+                        if (double.IsNaN(st.FirstV)) st.FirstV = v;
+                        else if (Math.Abs(v - st.FirstV) > 0.02) st.Touched = true;
+                        if (st.Touched) touched.Add(o);
+                    }
                     switch (o.Target)
                     {
                         case OutputTarget.Xbox360:
@@ -191,14 +221,30 @@ public sealed class MappingEngine
                             var vs = VJoyFor(vjoy, o.Device);
                             if (Math.Abs(v) > Math.Abs(vs.Axes[o.Index])) vs.Axes[o.Index] = v;
                             break;
+                        case OutputTarget.Mouse when b.Mode == BindingMode.AxisToDelta && o.Index == (int)MouseAxis.X: px += State(b).Out; break;
+                        case OutputTarget.Mouse when b.Mode == BindingMode.AxisToDelta && o.Index == (int)MouseAxis.Y: py += State(b).Out; break;
                         case OutputTarget.Mouse when o.Index == (int)MouseAxis.X: mx += v; break;
-                        case OutputTarget.Mouse: my += v; break;
+                        case OutputTarget.Mouse when o.Index == (int)MouseAxis.Y: my += v; break;
+                        case OutputTarget.Mouse when o.Index == (int)MouseAxis.Wheel: wheel += v; break;
+                        case OutputTarget.Mouse when o.Index == (int)MouseAxis.HWheel: hwheel += v; break;
                     }
                 }
             }
 
+            // Starting values (DefaultValue bindings) for outputs nothing has moved yet.
+            for (int i = 0; i < _bindings.Length; i++)
+            {
+                var b = _bindings[i];
+                if (b.Mode != BindingMode.DefaultValue || !Allowed(i) || b.Output!.Kind != OutputKind.Axis) continue;
+                if (touched is not null && touched.Contains(b.Output)) continue;
+                double dv = Math.Clamp(b.Settings.DefaultValue, b.Output.IsTrigger ? 0 : -1, 1);
+                if (b.Output.Target == OutputTarget.Xbox360) PadFor(pads, b.Output.Device).Axes[b.Output.Index] = dv;
+                else if (b.Output.Target == OutputTarget.VJoy) VJoyFor(vjoy, b.Output.Device).Axes[b.Output.Index] = dv;
+            }
+
             ApplyKeys(keys);
-            ApplyMouse(mouse, mx, my);
+            ApplyMouse(mouse, mx, my, px, py);
+            ApplyWheel(wheelButtons, wheel, hwheel);
             ApplyPads(pads);
             ApplyVJoy(vjoy);
         }
@@ -377,6 +423,68 @@ public sealed class MappingEngine
                 return true;
             }
 
+            case BindingMode.AxisMerger:
+            {
+                double hi = Read(input), lo = Read(b.Extra(0));
+                if (s.Invert) hi = -hi;
+                if (s.InvertY) lo = -lo;
+                v = s.MergeMode switch
+                {
+                    MergeMode.Greatest => Math.Abs(hi) > Math.Abs(lo) ? hi : lo,
+                    MergeMode.Sum => Math.Clamp(hi + lo, -1, 1),
+                    _ => (hi + lo) / 2,
+                };
+                v = Math.Clamp(AxisProcessor.ApplySensitivity(AxisProcessor.Deadzone(v, s.Deadzone), s), -1, 1);
+                pressed = v >= s.ButtonThreshold;
+                if (b.Output!.IsTrigger && s.TriggerFullRange) v = (v + 1) / 2;
+                return true;
+            }
+
+            case BindingMode.AxisToDelta:
+            {
+                var st = State(b);
+                double a = AxisProcessor.Deadzone(Read(input), s.Deadzone);
+                if (s.Invert) a = -a;
+                a = Math.Clamp(AxisProcessor.ApplySensitivity(a, s), -1, 1);
+                double dt = st.LastTickMs == long.MinValue ? 0 : now - st.LastTickMs;
+                st.LastTickMs = now;
+                // UCR sends Min..Max pixels every 10 ms; spread that over our ticks.
+                double per10 = a == 0 ? 0 : s.MinDelta + Math.Abs(a) * Math.Max(0, s.MaxDelta - s.MinDelta);
+                st.Out = Math.Sign(a) * per10 * dt / 10.0;
+                v = a;
+                pressed = v >= s.ButtonThreshold;
+                return true;
+            }
+
+            case BindingMode.FpvMix:
+            {
+                double roll = Read(input), yaw = Read(b.Extra(0));
+                if (s.Invert) roll = -roll;
+                if (s.InvertY) yaw = -yaw;
+                double mix = Math.Clamp(s.CameraAngle, 0, 90) / 90;
+                v = s.Component == PairComponent.X
+                    ? roll * (1 - mix) + yaw * mix
+                    : yaw * (1 - mix) - roll * mix;
+                v = Math.Clamp(v, -1, 1);
+                pressed = v >= s.ButtonThreshold;
+                return true;
+            }
+
+            case BindingMode.ReversibleThrottle:
+            {
+                var st = State(b);
+                bool rev = Down(b.Extra(0));
+                if (rev && !st.WasPressed) st.Toggled = !st.Toggled;
+                st.WasPressed = rev;
+                double t = Read(input);
+                if (s.Invert) t = input.Kind == InputKind.Trigger ? 1 - t : -t;
+                double half = input.Kind == InputKind.Trigger ? Math.Clamp(t, 0, 1) : (Math.Clamp(t, -1, 1) + 1) / 2;
+                v = st.Toggled ? -half : half;
+                if (s.InvertOutput) v = -v;
+                pressed = v >= s.ButtonThreshold;
+                return true;
+            }
+
             default: // Direct
             {
                 if (!_input.TryRead(input, out double raw)) return false;
@@ -384,7 +492,23 @@ public sealed class MappingEngine
                 {
                     // Buttons: Invert means "active while released"; driving an axis uses the
                     // configured pressed/released values.
-                    pressed = (raw >= 0.5) != s.Invert;
+                    bool down = raw >= 0.5;
+                    if (s.Toggle)
+                    {
+                        var st = State(b);
+                        if (down && !st.WasPressed) st.Toggled = !st.Toggled;
+                        st.WasPressed = down;
+                        pressed = st.Toggled != s.Invert;
+                    }
+                    else if (s.PulseMs > 0)
+                    {
+                        var st = State(b);
+                        bool edge = s.PulseOnRelease ? !down && st.WasPressed : down && !st.WasPressed;
+                        if (edge) st.ShortUntilMs = now + s.PulseMs;
+                        st.WasPressed = down;
+                        pressed = now < st.ShortUntilMs;
+                    }
+                    else pressed = down != s.Invert;
                     v = pressed ? s.ButtonAxisPressed : s.ButtonAxisReleased;
                 }
                 else if (s.Half != AxisHalf.Full)
@@ -401,6 +525,62 @@ public sealed class MappingEngine
                 }
                 return true;
             }
+        }
+    }
+
+    /// <summary>True if the binding's state conditions hold (UCR: a plugin is filtered unless state ^ negative).</summary>
+    private bool Allowed(int i)
+    {
+        var conditions = _bindings[i].Conditions;
+        if (conditions.Count == 0) return true;
+        var states = _owners[i].States;
+        foreach (var c in conditions)
+        {
+            states.TryGetValue(c.Name.Trim(), out bool on);
+            if (on == c.Not) return false;
+        }
+        return true;
+    }
+
+    /// <summary>SetState: a button press/release, or an axis entering/leaving XStart..XEnd, changes a named state.</summary>
+    private void RunStateSwitch(Binding b, Dictionary<string, bool> states)
+    {
+        var s = b.Settings;
+        string name = s.StateName.Trim();
+        if (name.Length == 0 || b.Input is null) return;
+        var st = State(b);
+        bool button = b.Input.Kind == InputKind.Button;
+        bool Inside(double x) => x >= s.XStart && x <= s.XEnd;
+        if (!st.Initialized)
+        {
+            st.Initialized = true;
+            st.WasPressed = !button && Inside(0); // UCR starts an axis at centre
+        }
+        bool active;
+        if (button) active = Down(b.Input) != s.Invert;
+        else
+        {
+            double x = Read(b.Input);
+            active = Inside(s.Invert ? -x : x);
+        }
+        if (active == st.WasPressed) return;
+        st.WasPressed = active;
+        states.TryGetValue(name, out bool cur);
+        switch (active ? s.StateOnPress : s.StateOnRelease)
+        {
+            case StateAction.On: states[name] = true; break;
+            case StateAction.Off: states[name] = false; break;
+            case StateAction.Toggle: states[name] = !cur; break;
+        }
+    }
+
+    /// <summary>States that are on in the active profiles, as "profile: state" (for status displays).</summary>
+    public IReadOnlyList<string> ActiveStates
+    {
+        get
+        {
+            lock (_gate)
+                return _owners.Distinct().SelectMany(p => p.States.Where(kv => kv.Value).Select(kv => $"{p.Name}: {kv.Key}")).ToList();
         }
     }
 
@@ -441,7 +621,8 @@ public sealed class MappingEngine
         lock (_gate)
         {
             ApplyKeys(new HashSet<int>());
-            ApplyMouse(new HashSet<MouseButton>(), 0, 0);
+            ApplyMouse(new HashSet<MouseButton>(), 0, 0, 0, 0);
+            ApplyWheel(new HashSet<MouseButton>(), 0, 0);
             if (_pad is not null)
                 foreach (var pad in _lastPads.Keys.OrderByDescending(p => p))
                 {
@@ -475,12 +656,14 @@ public sealed class MappingEngine
         _activeKey = key;
 
         _bindings = active.SelectMany(p => p.Bindings).ToArray();
+        _owners = active.SelectMany(p => p.Bindings.Select(_ => p)).ToArray();
+        _defaultOutputs = _bindings.Where(b => b.Mode == BindingMode.DefaultValue).Select(b => b.Output!).ToHashSet();
         _activeNames = active.Select(p => p.Name).ToArray();
         _skippedNames = skipped.Select(i => _profiles[i].Name).ToArray();
-        var padIndexes = _bindings.Where(b => b.Output!.Target == OutputTarget.Xbox360)
+        var padIndexes = _bindings.Where(b => b.Output?.Target == OutputTarget.Xbox360)
             .Select(b => Math.Clamp(b.Output!.Device, 0, OutputRef.MaxXboxPads - 1)).ToList();
         _padsNeeded = padIndexes.Count == 0 ? 0 : padIndexes.Max() + 1;
-        var blocks = _bindings.Where(b => b.Block).Select(b => b.Input!).ToHashSet();
+        var blocks = _bindings.Where(b => b.Block && b.Input is not null).Select(b => b.Input!).ToHashSet();
         _blockCandidates = blocks.Count == 0 ? NoBlocks : blocks;
         _blocked = _active ? _blockCandidates : NoBlocks;
     }
@@ -504,18 +687,46 @@ public sealed class MappingEngine
         foreach (var k in want.Except(_keysDown).ToList()) { _km.Key(k, true); _keysDown.Add(k); }
     }
 
-    private void ApplyMouse(HashSet<MouseButton> want, double vx, double vy)
+    /// <summary>Mouse buttons, plus movement: <paramref name="vx"/>/<paramref name="vy"/> as -1..1 deflection, <paramref name="px"/>/<paramref name="py"/> in pixels (Axis to Delta).</summary>
+    private void ApplyMouse(HashSet<MouseButton> want, double vx, double vy, double px, double py)
     {
         foreach (var b in _mouseDown.Except(want).ToList()) { _km.MouseButton(b, false); _mouseDown.Remove(b); }
         foreach (var b in want.Except(_mouseDown).ToList()) { _km.MouseButton(b, true); _mouseDown.Add(b); }
 
         // Keep fractional pixels so slow movement still moves.
-        _mouseRemX += Math.Clamp(vx, -1, 1) * MousePixelsPerTick;
-        _mouseRemY += Math.Clamp(vy, -1, 1) * MousePixelsPerTick;
+        _mouseRemX += Math.Clamp(vx, -1, 1) * MousePixelsPerTick + px;
+        _mouseRemY += Math.Clamp(vy, -1, 1) * MousePixelsPerTick + py;
         int dx = (int)Math.Truncate(_mouseRemX), dy = (int)Math.Truncate(_mouseRemY);
-        if (vx == 0) _mouseRemX = 0; else _mouseRemX -= dx;
-        if (vy == 0) _mouseRemY = 0; else _mouseRemY -= dy;
+        if (vx == 0 && px == 0) _mouseRemX = 0; else _mouseRemX -= dx;
+        if (vy == 0 && py == 0) _mouseRemY = 0; else _mouseRemY -= dy;
         if (dx != 0 || dy != 0) _km.MouseMove(dx, dy);
+    }
+
+    /// <summary>Wheel "buttons" scroll one notch when pressed; wheel axes scroll continuously.</summary>
+    private void ApplyWheel(HashSet<MouseButton> want, double wheel, double hwheel)
+    {
+        foreach (var b in want.Except(_wheelHeld))
+            switch (b)
+            {
+                case MouseButton.WheelUp: _km.MouseWheel(WheelNotch, false); break;
+                case MouseButton.WheelDown: _km.MouseWheel(-WheelNotch, false); break;
+                case MouseButton.WheelRight: _km.MouseWheel(WheelNotch, true); break;
+                case MouseButton.WheelLeft: _km.MouseWheel(-WheelNotch, true); break;
+            }
+        _wheelHeld.Clear();
+        _wheelHeld.UnionWith(want);
+
+        static int Notches(ref double rem, double v)
+        {
+            if (v == 0) { rem = 0; return 0; }
+            rem += Math.Clamp(v, -1, 1) * WheelNotchesPerTick;
+            int n = (int)Math.Truncate(rem + Math.Sign(rem) * 1e-9); // 0.08 × 50 is 3.99999…
+            rem -= n;
+            return n;
+        }
+        int nv = Notches(ref _wheelRem, wheel), nh = Notches(ref _hwheelRem, hwheel);
+        if (nv != 0) _km.MouseWheel(nv * WheelNotch, false);
+        if (nh != 0) _km.MouseWheel(nh * WheelNotch, true);
     }
 
     /// <summary>
@@ -547,7 +758,7 @@ public sealed class MappingEngine
         if (_vjoy is null) return;
         // Devices used by the active bindings stay acquired even while all their inputs are idle.
         foreach (var b in _bindings)
-            if (b.Output!.Target == OutputTarget.VJoy) VJoyFor(want, b.Output.Device);
+            if (b.Output?.Target == OutputTarget.VJoy) VJoyFor(want, b.Output.Device);
 
         foreach (var id in _lastVJoy.Keys.Except(want.Keys).ToList())
         {

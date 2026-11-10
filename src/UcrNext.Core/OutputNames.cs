@@ -6,7 +6,11 @@ public static class OutputNames
     public static string Describe(OutputRef o) => o.Target switch
     {
         OutputTarget.Keyboard => "Key: " + VirtualKeys.Name(o.Index),
+        OutputTarget.Mouse when o.Kind == OutputKind.Button && o.Index >= (int)MouseButton.WheelUp =>
+            "Mouse wheel: " + ((MouseButton)o.Index).ToString()[5..] + " (one notch per press)",
         OutputTarget.Mouse when o.Kind == OutputKind.Button => "Mouse button: " + (MouseButton)o.Index,
+        OutputTarget.Mouse when o.Index == (int)MouseAxis.Wheel => "Mouse wheel: scroll (axis)",
+        OutputTarget.Mouse when o.Index == (int)MouseAxis.HWheel => "Mouse wheel: scroll sideways (axis)",
         OutputTarget.Mouse => "Mouse move: " + (MouseAxis)o.Index,
         OutputTarget.Xbox360 when o.Kind == OutputKind.Button => $"Xbox 360 #{o.Device + 1}: {(XboxButton)o.Index}",
         OutputTarget.Xbox360 => $"Xbox 360 #{o.Device + 1}: {(XboxAxis)o.Index}",

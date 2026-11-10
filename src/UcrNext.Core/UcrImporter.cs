@@ -172,7 +172,7 @@ public sealed class UcrImporter
             string type = PluginType(plugin);
             var outBindings = plugin.Element("Outputs")?.Elements("DeviceBinding").Select(ReadBinding).ToList() ?? new();
             var outputs = outBindings.Select(b => b.IsBound ? ResolveOutput(b, scope, m.Title, notes) : null).ToList();
-            if (plugin.Element("Filters")?.HasElements == true) notes.Add($"\"{m.Title}\": plugin filters are not supported and were ignored");
+            int firstNew = profile.Bindings.Count;
 
             (InputRef? Ref, bool FlipY, bool Block) In(int i) => i < inputs.Count ? inputs[i] : (null, false, false);
             OutputRef? Out(int i) => i < outputs.Count ? outputs[i] : null;
@@ -227,6 +227,18 @@ public sealed class UcrImporter
                     // UCR only applies its curve when sensitivity isn't 100 %; Linear = plain multiplier.
                     NonLinearSensitivity = sensitivity != 100 && !P("Linear"),
                 };
+            }
+
+            // Binding without the usual input + output pair (SetState has no output, DefaultValue no input).
+            void AddRaw(string suffix, BindingMode mode, InputRef? input, OutputRef? output, AxisSettings settings, bool block = false)
+            {
+                if (Binding.NeedsInput(mode) && input is null) return;
+                if (Binding.NeedsOutput(mode) && output is null) return;
+                profile.Bindings.Add(new Binding
+                {
+                    Name = m.Title + suffix, Mode = mode, Input = input, Output = output, Settings = settings,
+                    Block = input is not null && BlockFor(input, block, m.Title, notes),
+                });
             }
 
             AxisSettings PairSettings(PairComponent c, double rotation = 0)
@@ -349,12 +361,118 @@ public sealed class UcrImporter
                     });
                     break;
                 }
+                case "AxisMerger":
+                {
+                    var s = AxisSettingsFrom();
+                    s.AntiDeadzone = 0;
+                    s.MergeMode = Enum<MergeMode>(S("Mode", "Average"), MergeMode.Average);
+                    s.Invert = P("InvertHigh") ^ Flip(0);
+                    s.InvertY = P("InvertLow") ^ Flip(1);
+                    s.TriggerFullRange = Out(0)?.IsTrigger == true;
+                    AddMode("", BindingMode.AxisMerger, 0, new[] { 1 }, Out(0), s);
+                    break;
+                }
+                case "AxisInitializer":
+                    AddRaw("", BindingMode.DefaultValue, null, Out(0), new AxisSettings { DefaultValue = Math.Clamp(D("Percentage", 0) / 100, -1, 1) });
+                    break;
+                case "AxisToDelta":
+                {
+                    // UCR's default sensitivity is 1 % (a strong curve), applied whenever it isn't 100 %.
+                    double sens = D("Sensitivity", 1);
+                    AddMode("", BindingMode.AxisToDelta, 0, Array.Empty<int>(), Out(0), new AxisSettings
+                    {
+                        Invert = P("Invert") ^ Flip(0),
+                        Deadzone = Math.Clamp(D("DeadZone", 0) / 100, 0, 0.95),
+                        Sensitivity = sens <= 0 ? 0.01 : sens / 100,
+                        NonLinearSensitivity = sens != 100,
+                        MinDelta = (int)D("Min", 1),
+                        MaxDelta = (int)D("Max", 20),
+                    });
+                    break;
+                }
+                case "ButtonToEvent":
+                    // UCR's events are mouse wheel notches: one per press (or per release).
+                    Add("", In(0), Out(0), new AxisSettings { PulseMs = 50, PulseOnRelease = S("Mode", "Press") is "Release" or "1" }, false);
+                    break;
+                case "EventToButton":
+                    Add("", In(0), Out(0), new AxisSettings { PulseMs = Math.Max(1, (int)D("HoldTime", 50)) }, false);
+                    break;
+                case "FpvAngleMix":
+                {
+                    AxisSettings Fpv(PairComponent c) => new()
+                    {
+                        Component = c,
+                        CameraAngle = Math.Clamp(D("CameraAngle", 0), 0, 90),
+                        Invert = P("InvertRoll") ^ Flip(0),
+                        InvertY = P("InvertYaw") ^ Flip(1),
+                    };
+                    AddMode(" (roll)", BindingMode.FpvMix, 0, new[] { 1 }, Out(0), Fpv(PairComponent.X));
+                    AddMode(" (yaw)", BindingMode.FpvMix, 0, new[] { 1 }, Out(1), Fpv(PairComponent.Y));
+                    break;
+                }
+                case "ReversibleThrottle":
+                    AddMode("", BindingMode.ReversibleThrottle, 0, new[] { 1 }, Out(0), new AxisSettings
+                    {
+                        Invert = P("InvertInput") ^ Flip(0),
+                        InvertOutput = P("InvertOutput"),
+                    });
+                    break;
+                case "ButtonToFilter":
+                    AddRaw(" (state)", BindingMode.SetState, In(0).Ref, null, new AxisSettings
+                    {
+                        StateName = S("FilterName", "").Trim(),
+                        StateOnPress = StateFrom(S("FilterStateDown", "Active")),
+                        StateOnRelease = StateFrom(S("FilterStateUp", "Inactive")),
+                    }, In(0).Block);
+                    break;
+                case "AxisToFilter":
+                    AddRaw(" (state)", BindingMode.SetState, In(0).Ref, null, new AxisSettings
+                    {
+                        StateName = S("FilterName", "").Trim(),
+                        Invert = Flip(0),
+                        XStart = D("RangeLowerBound", -50) / 100,
+                        XEnd = D("RangeUpperBound", 50) / 100,
+                        StateOnPress = StateFrom(S("FilterStateEntering", "Inactive")),
+                        StateOnRelease = StateFrom(S("FilterStateExiting", "Active")),
+                    });
+                    break;
                 default:
                     notes.Add($"\"{m.Title}\": plugin \"{type}\" is not supported yet");
                     break;
             }
+
+            // UCR plugin filters → "only while" state conditions on every binding made from this plugin.
+            var conditions = ReadFilters(plugin);
+            if (conditions.Count > 0)
+                for (int i = firstNew; i < profile.Bindings.Count; i++)
+                    profile.Bindings[i].Conditions = conditions.Select(c => new StateCondition { Name = c.Name, Not = c.Not }).ToList();
         }
     }
+
+    /// <summary>A plugin's &lt;Filters&gt;: each &lt;Filter&gt; has Name and Negative (as elements or attributes).</summary>
+    private static List<StateCondition> ReadFilters(XElement plugin)
+    {
+        var list = new List<StateCondition>();
+        foreach (var f in plugin.Element("Filters")?.Elements() ?? Enumerable.Empty<XElement>())
+        {
+            string name = ((string?)f.Element("Name") ?? (string?)f.Attribute("Name") ?? "").Trim();
+            bool negative = Bool((string?)f.Element("Negative") ?? (string?)f.Attribute("Negative"));
+            if (name.Length > 0) list.Add(new StateCondition { Name = name, Not = negative });
+        }
+        return list;
+    }
+
+    /// <summary>UCR FilterMode (Active, Inactive, Toggle, Unchanged — by name or number).</summary>
+    private static StateAction StateFrom(string v) => v.Trim() switch
+    {
+        "Active" or "0" => StateAction.On,
+        "Inactive" or "1" => StateAction.Off,
+        "Toggle" or "2" => StateAction.Toggle,
+        _ => StateAction.Unchanged,
+    };
+
+    private static T Enum<T>(string v, T def) where T : struct, System.Enum =>
+        System.Enum.TryParse<T>(v.Trim(), true, out var r) && System.Enum.IsDefined(r) ? r : def;
 
     private OutputRef? ResolveOutput(UcrBinding b, Scope scope, string mapping, List<string> notes)
     {
@@ -524,7 +642,9 @@ public sealed class UcrImporter
                     warn = "mouse movement speed may differ from UCR";
                     return OutputRef.Mouse((MouseAxis)b.Value);
                 }
-                why = "mouse wheel output is not supported yet";
+                if (!keyboard && b.Type != 0 && b.Value is >= 5 and < 9) // Wheel Up, Down, Right, Left
+                    return OutputRef.Mouse(MouseButton.WheelUp + (b.Value - 5));
+                why = $"unsupported mouse output (type {b.Type}, index {b.Value})";
                 return null;
             }
             default:

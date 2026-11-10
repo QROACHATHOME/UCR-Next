@@ -119,7 +119,7 @@ public sealed class BindingVm : Observable
     {
         get
         {
-            if (Model.Input is not { } i) return "(press Bind…)";
+            if (Model.Input is not { } i) return Binding.NeedsInput(Model.Mode) ? "(press Bind…)" : "(no input needed)";
             var alias = DeviceCatalog.Current?.Alias(i.DeviceId);
             return alias is null ? i.ToString() : $"{alias} · {i}";
         }
@@ -199,13 +199,16 @@ public sealed class BindingVm : Observable
             int need = Binding.ExtraInputNames(value).Length;
             while (Model.ExtraInputs.Count < need) Model.ExtraInputs.Add(null);
             if (Model.ExtraInputs.Count > need) Model.ExtraInputs.RemoveRange(need, Model.ExtraInputs.Count - need);
-            Raise(); Raise(nameof(Extras)); Raise(nameof(ModeHint));
+            Raise(); Raise(nameof(Extras)); Raise(nameof(ModeHint)); Raise(nameof(InputText)); Raise(nameof(NeedsOutput));
             _changed(this);
         }
     }
 
     public string ModeHint => Model.Mode switch
     {
+        BindingMode.Direct when Model.Settings.Toggle && Model.Input?.Kind == InputKind.Button => "Toggle: press for on, press again for off",
+        BindingMode.Direct when Model.Settings.PulseMs > 0 && Model.Input?.Kind == InputKind.Button =>
+            $"Pulse: {Model.Settings.PulseMs} ms press each time the button is {(Model.Settings.PulseOnRelease ? "released" : "pressed")}",
         BindingMode.Direct => "",
         BindingMode.ButtonsToAxis => "Input alone = +1, 2nd button alone = -1",
         BindingMode.StickPair => "Two axes as one stick (circular deadzone, rotation); outputs the X or Y part",
@@ -215,8 +218,23 @@ public sealed class BindingVm : Observable
         BindingMode.DeltaToButtons => "Mouse/trackball movement → button for one direction",
         BindingMode.LongPress => "Short press or long press of the input",
         BindingMode.Increment => "Axis moves the output gradually",
+        BindingMode.AxisMerger => "Two axes → one (average, greatest or sum), e.g. two pedals",
+        BindingMode.AxisToDelta => "Axis → mouse movement (output: Mouse move X or Y)",
+        BindingMode.DefaultValue => "Starting value for the output axis until something moves it (no input)",
+        BindingMode.FpvMix => "Roll + yaw mixed by a camera angle; outputs roll (X) or yaw (Y)",
+        BindingMode.ReversibleThrottle => "Throttle → forward half; the button flips to reverse",
+        BindingMode.SetState => string.IsNullOrWhiteSpace(Model.Settings.StateName)
+            ? "Switches a named state (set its name in Settings); no output"
+            : $"Switches state \"{Model.Settings.StateName.Trim()}\" — no output",
         _ => "",
     };
+
+    /// <summary>SetState bindings have no output.</summary>
+    public bool NeedsOutput => Binding.NeedsOutput(Model.Mode);
+
+    /// <summary>"Only while: shift, !menu" (see Settings).</summary>
+    public bool HasConditions => Model.Conditions.Count > 0;
+    public string ConditionsText => "Only while: " + StateCondition.Format(Model.Conditions);
 
     public sealed record ExtraSlot(BindingVm Owner, int Index, string Name, string Text);
 
@@ -235,6 +253,7 @@ public sealed class BindingVm : Observable
     public void SettingsEdited()
     {
         Raise(nameof(Deadzone)); Raise(nameof(Sensitivity)); Raise(nameof(Invert)); Raise(nameof(TriggerFullRange));
+        Raise(nameof(HasConditions)); Raise(nameof(ConditionsText)); Raise(nameof(ModeHint));
         _changed(this);
     }
 

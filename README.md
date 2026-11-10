@@ -23,10 +23,12 @@ Status: **0.5**. Windows 10/11 only.
   - **Per-keyboard keys** through Raw Input (`rawkbd:VID:PID#n`) — no driver needed, but read-only:
     the original key still reaches other programs. To block keys on one keyboard only, use Interception.
   - **Per-device** keyboards and mice through the optional **Interception** driver
-- **Outputs**: keyboard and mouse (SendInput, scan codes), up to **four virtual Xbox 360** pads
+- **Outputs**: keyboard, mouse buttons, mouse movement and **mouse wheel** (one notch per button press,
+  or continuous scrolling from an axis; SendInput, scan codes), up to **four virtual Xbox 360** pads
   (P1–P4, ViGEmBus; plugged in in order so games number them correctly), **vJoy** devices 1–16
 - **Bindings**: any input → any output, with deadzone, anti-deadzone, sensitivity (linear or UCR's
-  curve), invert; analog → button past a threshold; button → axis with pressed/released values
+  curve), invert; analog → button past a threshold; button → axis with pressed/released values;
+  **Toggle** (press for on, again for off) and **Pulse** (a fixed-length press on each press or release) for buttons
 - **Binding modes** (*Mode* on the binding's second line, *Settings…* for all options):
 
   | Mode | What it does | UCR plugin |
@@ -40,6 +42,16 @@ Status: **0.5**. Windows 10/11 only.
   | DeltaToButtons | movement → button per direction, with centre timeout and debounce | Delta to Buttons |
   | LongPress | short press and long press of one button → two outputs | Button to Buttons (Long Press) |
   | Increment | axis moves the output gradually | Axis to Axis Increment |
+  | AxisMerger | two axes → one: average, greatest or sum (e.g. two pedals on one axis) | Axis Merger |
+  | AxisToDelta | stick → mouse movement, Min–Max pixels per 10 ms | Axis to Delta |
+  | DefaultValue | no input: an output axis starts at this value until something moves it | Axis Initializer |
+  | FpvMix | roll and yaw mixed by a camera angle | FPV Angle Mix |
+  | ReversibleThrottle | throttle drives half an axis; a button flips forward / reverse | Reversible Throttle |
+  | SetState | a button (or an axis entering a range) switches a named state on, off or toggles it | Button / Axis to Filter |
+- **States (shift layers)**: a *SetState* binding switches a named state such as `shift`; any binding can be
+  limited to *Only while states* `shift` (or `!shift` = while off) in its *Settings*. One button can then do
+  different things with and without a shift button held, or with a "menu" state toggled on. Each profile
+  has its own states; a binding that is switched off by a state releases its output.
 - **Blocking**: tick *Block* on a keyboard/mouse binding and the original key/button no longer
   reaches other programs while mapping is on (any device via hooks, one device via Interception)
 - **Per-application profiles**: list programs (e.g. `game.exe`) on a profile and it is only active
@@ -191,9 +203,11 @@ use *File → Import UCR profiles…*, or `ucrnext import path\to\context.xml`.
 |---|---|
 | Inputs: XInput, DirectInput (VID/PID + instance), Interception keyboard keys, mouse buttons, mouse movement and wheel | same devices; keyboard/mouse become "any keyboard/mouse" unless you choose per-device — then Interception ids if Interception is running (can block), otherwise Raw Input ids (no driver, can't block; the report lists bindings that blocked in UCR) |
 | Outputs: ViGEm Xbox 360 pads 1–4, vJoy axes/buttons, Interception keyboard keys / mouse buttons / mouse movement | virtual Xbox 360 pads P1–P4, vJoy, SendInput |
-| Plugins: Button to Button, Axis to Axis, Axes to Axes, Axis to Button, Button to Axis, Buttons to Axis, Axis Splitter, and HidWizards/UCR-Plugins: Axes to Axes (Rotation), Axes to Axes (Trim), Axes Range to Button, Axis to Axis Increment, Button to Buttons (Long Press), Delta to Axis, Delta to Buttons | converted to the binding modes above with the same maths as UCR (deadzones incl. circular, anti-deadzone, UCR's sensitivity curve, full-range triggers, timers) |
+| Plugins: Button to Button, Axis to Axis, Axes to Axes, Axis to Button, Button to Axis, Buttons to Axis, Axis Splitter, Axis Merger, Axis Initializer, Button to Event, Button to Filter, Axis to Filter, and HidWizards/UCR-Plugins: Axes to Axes (Rotation), Axes to Axes (Trim), Axes Range to Button, Axis to Axis Increment, Button to Buttons (Long Press), Delta to Axis, Delta to Buttons, Axis to Delta, Event to Button, FPV Angle Mix, Reversible Throttle | converted to the binding modes above with the same maths as UCR (deadzones incl. circular, anti-deadzone, UCR's sensitivity curve, full-range triggers, timers) |
 | Block flag on inputs | *Block* on keyboard/mouse bindings |
-| Not converted (reported) | Button to Event, Axis Merger, Axis Initializer, Event to Button, Axis to Delta, FPV Angle Mix, Reversible Throttle, filters, shadow devices, DS4 output, vJoy POV output |
+| Plugin filters | *Only while states* on the bindings; Button/Axis to Filter become *SetState* bindings. Unlike UCR, a binding switched off by a state releases its output instead of freezing it |
+| Events | mouse wheel up/down/left/right: Button to Event → wheel output (one notch per press/release), Event to Button → a pulse of the hold time |
+| Not converted (reported) | shadow devices, DS4 output, vJoy POV output |
 
 ## Running in the background / with Windows
 

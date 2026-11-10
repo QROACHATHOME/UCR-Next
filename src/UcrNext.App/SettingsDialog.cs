@@ -30,13 +30,42 @@ public sealed class SettingsDialog : Window
         [nameof(AxisSettings.TimeoutMs)] = "ms without movement before returning to centre / releasing",
         [nameof(AxisSettings.Direction)] = "+1 = fires on positive movement, -1 = negative",
         [nameof(AxisSettings.IncrementRate)] = "UCR 'Sensitivity %' of Axis to Axis Increment",
+        [nameof(AxisSettings.Toggle)] = "press once for on, again for off",
+        [nameof(AxisSettings.PulseMs)] = "each press gives a press of exactly this long (0 = off)",
+        [nameof(AxisSettings.PulseOnRelease)] = "with a pulse: fire when the button is let go",
+        [nameof(AxisSettings.MergeMode)] = "Average, Greatest (larger deflection wins) or Sum",
+        [nameof(AxisSettings.MinDelta)] = "pixels per 10 ms just outside the deadzone",
+        [nameof(AxisSettings.MaxDelta)] = "pixels per 10 ms at full deflection",
+        [nameof(AxisSettings.DefaultValue)] = "-1..1 (e.g. -1 = throttle closed, 0 = centre)",
+        [nameof(AxisSettings.CameraAngle)] = "0-90 degrees; 90 swaps roll and yaw completely",
+        [nameof(AxisSettings.StateName)] = "e.g. shift; other bindings can be limited to it",
+        [nameof(AxisSettings.StateOnPress)] = "On, Off, Toggle or Unchanged",
+        [nameof(AxisSettings.StateOnRelease)] = "On, Off, Toggle or Unchanged",
+    };
+
+    /// <summary>Labels that read better than the property name for a mode.</summary>
+    private static string LabelFor(BindingMode mode, bool buttonInput, string name) => (mode, name) switch
+    {
+        (BindingMode.AxisMerger, "Invert") => "Invert high axis",
+        (BindingMode.AxisMerger, "InvertY") => "Invert low axis",
+        (BindingMode.FpvMix, "Invert") => "Invert roll",
+        (BindingMode.FpvMix, "InvertY") => "Invert yaw",
+        (BindingMode.FpvMix, "Component") => "Output (X roll, Y yaw)",
+        (BindingMode.ReversibleThrottle, "Invert") => "Invert input",
+        (BindingMode.SetState, "StateOnPress") => buttonInput ? "When pressed" : "When entering the range",
+        (BindingMode.SetState, "StateOnRelease") => buttonInput ? "When released" : "When leaving the range",
+        (BindingMode.SetState, "XStart") => "Range from (-1..1)",
+        (BindingMode.SetState, "XEnd") => "Range to (-1..1)",
+        (BindingMode.SetState, "Invert") => "Invert input",
+        (_, "PulseMs") => "Pulse (ms)",
+        _ => Humanize(name),
     };
 
     private static readonly string[] Common = { nameof(AxisSettings.Invert) };
 
     private static string[] Relevant(BindingMode mode, bool buttonInput, bool triggerOutput) => mode switch
     {
-        BindingMode.Direct when buttonInput => new[] { "Invert", "ButtonAxisPressed", "ButtonAxisReleased" },
+        BindingMode.Direct when buttonInput => new[] { "Invert", "Toggle", "PulseMs", "PulseOnRelease", "ButtonAxisPressed", "ButtonAxisReleased" },
         BindingMode.Direct => new[] { "Invert", "Deadzone", "AntiDeadzone", "Sensitivity", "NonLinearSensitivity", "ButtonThreshold", "Half" }
             .Concat(triggerOutput ? new[] { "TriggerFullRange" } : Array.Empty<string>()).ToArray(),
         BindingMode.ButtonsToAxis => new[] { "Invert" },
@@ -47,6 +76,14 @@ public sealed class SettingsDialog : Window
         BindingMode.DeltaToButtons => new[] { "Direction", "DeltaDeadzone", "TimeoutMs", "DebounceMs" },
         BindingMode.LongPress => new[] { "Component", "LongPressMs", "ShortPressMs" },
         BindingMode.Increment => new[] { "Invert", "Deadzone", "Sensitivity", "NonLinearSensitivity", "IncrementRate", "CounterEffect" },
+        BindingMode.AxisMerger => new[] { "MergeMode", "Invert", "InvertY", "Deadzone", "Sensitivity", "NonLinearSensitivity", "ButtonThreshold" }
+            .Concat(triggerOutput ? new[] { "TriggerFullRange" } : Array.Empty<string>()).ToArray(),
+        BindingMode.AxisToDelta => new[] { "Invert", "Deadzone", "Sensitivity", "NonLinearSensitivity", "MinDelta", "MaxDelta" },
+        BindingMode.DefaultValue => new[] { "DefaultValue" },
+        BindingMode.FpvMix => new[] { "Component", "CameraAngle", "Invert", "InvertY" },
+        BindingMode.ReversibleThrottle => new[] { "Invert", "InvertOutput" },
+        BindingMode.SetState when buttonInput => new[] { "StateName", "StateOnPress", "StateOnRelease", "Invert" },
+        BindingMode.SetState => new[] { "StateName", "XStart", "XEnd", "StateOnPress", "StateOnRelease", "Invert" },
         _ => Common,
     };
 
@@ -67,7 +104,8 @@ public sealed class SettingsDialog : Window
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(140) });
         grid.ColumnDefinitions.Add(new ColumnDefinition());
 
-        var names = Relevant(binding.Model.Mode, binding.Model.Input?.Kind == InputKind.Button, binding.Model.Output?.IsTrigger == true);
+        bool buttonInput = binding.Model.Input?.Kind == InputKind.Button;
+        var names = Relevant(binding.Model.Mode, buttonInput, binding.Model.Output?.IsTrigger == true);
         foreach (var name in names)
         {
             var prop = typeof(AxisSettings).GetProperty(name, BindingFlags.Public | BindingFlags.Instance);
@@ -75,7 +113,7 @@ public sealed class SettingsDialog : Window
             int row = grid.RowDefinitions.Count;
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-            var label = new TextBlock { Text = Humanize(name), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 3, 6, 3) };
+            var label = new TextBlock { Text = LabelFor(binding.Model.Mode, buttonInput, name), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 3, 6, 3) };
             Grid.SetRow(label, row);
             grid.Children.Add(label);
 
@@ -91,6 +129,23 @@ public sealed class SettingsDialog : Window
                 Grid.SetRow(hint, row); Grid.SetColumn(hint, 2);
                 grid.Children.Add(hint);
             }
+        }
+
+        // States this binding depends on (UCR plugin filters), for every mode.
+        {
+            int row = grid.RowDefinitions.Count;
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var label = new TextBlock { Text = "Only while states", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 12, 6, 3) };
+            var box = new TextBox { Text = StateCondition.Format(binding.Model.Conditions), Margin = new Thickness(0, 12, 0, 2) };
+            var hint = new TextBlock
+            {
+                Text = "e.g. shift, !menu — works only while shift is on and menu is off (states are set by SetState bindings). Empty = always.",
+                FontSize = 11, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 12, 0, 0),
+            };
+            hint.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
+            Grid.SetRow(label, row); Grid.SetRow(box, row); Grid.SetColumn(box, 1); Grid.SetRow(hint, row); Grid.SetColumn(hint, 2);
+            grid.Children.Add(label); grid.Children.Add(box); grid.Children.Add(hint);
+            _apply.Add(() => binding.Model.Conditions = StateCondition.Parse(box.Text));
         }
 
         var ok = new Button { Content = "OK", IsDefault = true, MinWidth = 80 };
@@ -126,6 +181,12 @@ public sealed class SettingsDialog : Window
             var combo = new ComboBox { ItemsSource = Enum.GetValues(t), SelectedItem = prop.GetValue(s), Margin = new Thickness(0, 2, 0, 2) };
             _apply.Add(() => { if (combo.SelectedItem is not null) prop.SetValue(s, combo.SelectedItem); });
             return combo;
+        }
+        if (t == typeof(string))
+        {
+            var text = new TextBox { Text = (string?)prop.GetValue(s) ?? "", Margin = new Thickness(0, 2, 0, 2) };
+            _apply.Add(() => prop.SetValue(s, text.Text.Trim()));
+            return text;
         }
         var box = new TextBox
         {

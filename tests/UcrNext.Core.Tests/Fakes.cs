@@ -20,6 +20,7 @@ internal sealed class FakeKm : IKeyboardMouseOutput
     public void Key(int vk, bool down) => Events.Add($"key {vk} {(down ? "down" : "up")}");
     public void MouseButton(MouseButton button, bool down) => Events.Add($"mouse {button} {(down ? "down" : "up")}");
     public void MouseMove(int dx, int dy) => Events.Add($"move {dx} {dy}");
+    public void MouseWheel(int delta, bool horizontal) => Events.Add($"wheel {delta}{(horizontal ? " h" : "")}");
 }
 
 internal sealed class FakePad : IVirtualPadOutput

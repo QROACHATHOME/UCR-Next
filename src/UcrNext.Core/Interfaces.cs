@@ -27,6 +27,8 @@ public interface IKeyboardMouseOutput
     void Key(int vk, bool down);
     void MouseButton(MouseButton button, bool down);
     void MouseMove(int dx, int dy);
+    /// <summary>Scrolls by <paramref name="delta"/> (120 = one notch; positive = up / right).</summary>
+    void MouseWheel(int delta, bool horizontal);
 }
 
 /// <summary>Full state of a virtual Xbox 360 pad.</summary>

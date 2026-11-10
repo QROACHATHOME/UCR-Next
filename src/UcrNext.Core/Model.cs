@@ -40,7 +40,26 @@ public enum BindingMode
     LongPress,
     /// <summary>Axis moves the output gradually ("incremental"), like UCR's Axis to Axis Increment.</summary>
     Increment,
+    /// <summary>Two axes → one (average, greatest or sum): Input = high axis, ExtraInputs[0] = low axis. UCR Axis Merger.</summary>
+    AxisMerger,
+    /// <summary>Axis → mouse movement at Min..Max pixels per 10 ms (UCR Axis to Delta). Output: a mouse axis.</summary>
+    AxisToDelta,
+    /// <summary>No input: holds the output axis at Settings.DefaultValue until another binding on it moves (UCR Axis Initializer).</summary>
+    DefaultValue,
+    /// <summary>Roll + yaw mixed by a camera angle (UCR FPV Angle Mix): Input = roll, ExtraInputs[0] = yaw; Component X = roll out, Y = yaw out.</summary>
+    FpvMix,
+    /// <summary>Throttle axis → half axis; ExtraInputs[0] = button that flips between forward and reverse (UCR Reversible Throttle).</summary>
+    ReversibleThrottle,
+    /// <summary>No output: a button (or an axis entering/leaving a range) switches a named state on/off (UCR Button/Axis to Filter).</summary>
+    SetState,
 }
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum MergeMode { Average, Greatest, Sum }
+
+/// <summary>What a <see cref="BindingMode.SetState"/> binding does to its state.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum StateAction { Unchanged, On, Off, Toggle }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum PairComponent { X, Y }
@@ -96,10 +115,22 @@ public enum XboxButton
 public enum XboxAxis { LeftX, LeftY, RightX, RightY, LeftTrigger, RightTrigger }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum MouseButton { Left, Right, Middle, X1, X2 }
+public enum MouseButton
+{
+    Left, Right, Middle, X1, X2,
+    /// <summary>Wheel "buttons": as an output, one wheel notch each time it is pressed.</summary>
+    WheelUp, WheelDown, WheelRight, WheelLeft,
+}
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum MouseAxis { X, Y }
+public enum MouseAxis
+{
+    X, Y,
+    /// <summary>Scrolls continuously: up for positive values.</summary>
+    Wheel,
+    /// <summary>Scrolls sideways continuously: right for positive values.</summary>
+    HWheel,
+}
 
 /// <summary>
 /// Identifies one output control. Index meaning depends on Target/Kind:
@@ -206,6 +237,47 @@ public sealed class AxisSettings
     public double IncrementRate { get; set; } = 2;
     /// <summary>Increment: multiplier when the input moves back toward centre against the output.</summary>
     public double CounterEffect { get; set; } = 1.5;
+
+    /// <summary>Button input: each press switches the output on, the next press off.</summary>
+    public bool Toggle { get; set; }
+    /// <summary>Button input: each press gives a press of exactly this many ms (0 = follow the button). UCR Event to Button.</summary>
+    public int PulseMs { get; set; }
+    /// <summary>With <see cref="PulseMs"/>: pulse when the button is released instead of pressed.</summary>
+    public bool PulseOnRelease { get; set; }
+    /// <summary>AxisMerger: how the two axes are combined.</summary>
+    public MergeMode MergeMode { get; set; }
+    /// <summary>AxisToDelta: mouse pixels per 10 ms just outside the deadzone and at full deflection.</summary>
+    public int MinDelta { get; set; } = 1;
+    public int MaxDelta { get; set; } = 20;
+    /// <summary>DefaultValue: the starting axis value (-1..1).</summary>
+    public double DefaultValue { get; set; }
+    /// <summary>FpvMix: camera angle in degrees (0..90).</summary>
+    public double CameraAngle { get; set; }
+    /// <summary>ReversibleThrottle: invert the output.</summary>
+    public bool InvertOutput { get; set; }
+    /// <summary>SetState: the state's name (e.g. "shift"); not case-sensitive.</summary>
+    public string StateName { get; set; } = "";
+    /// <summary>SetState: action when the button is pressed / the axis enters XStart..XEnd.</summary>
+    public StateAction StateOnPress { get; set; } = StateAction.On;
+    /// <summary>SetState: action when the button is released / the axis leaves XStart..XEnd.</summary>
+    public StateAction StateOnRelease { get; set; } = StateAction.Off;
+}
+
+/// <summary>A binding only works while the named state is on (or off, with <see cref="Not"/>). UCR plugin filters.</summary>
+public sealed class StateCondition
+{
+    public string Name { get; set; } = "";
+    public bool Not { get; set; }
+
+    public override string ToString() => (Not ? "!" : "") + Name;
+
+    /// <summary>"shift, !menu" → conditions.</summary>
+    public static List<StateCondition> Parse(string? text) =>
+        (text ?? "").Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(t => t.StartsWith('!') ? new StateCondition { Name = t[1..].Trim(), Not = true } : new StateCondition { Name = t })
+            .Where(c => c.Name.Length > 0).ToList();
+
+    public static string Format(IEnumerable<StateCondition> conditions) => string.Join(", ", conditions);
 }
 
 /// <summary>Identifies a physical device for a profile rule (matches by id, or by name if the id differs).</summary>
@@ -243,8 +315,22 @@ public sealed class Binding
         BindingMode.StickTrim => new[] { "Y axis", "Trim button", "Reset trim button" },
         BindingMode.AxesRange => new[] { "Axis 2" },
         BindingMode.DeltaToAxis => new[] { "Reset button (optional)" },
+        BindingMode.AxisMerger => new[] { "Low axis" },
+        BindingMode.FpvMix => new[] { "Yaw axis" },
+        BindingMode.ReversibleThrottle => new[] { "Reverse button" },
         _ => Array.Empty<string>(),
     };
+
+    /// <summary>Modes that work without an input / without an output.</summary>
+    public static bool NeedsInput(BindingMode mode) => mode != BindingMode.DefaultValue;
+    public static bool NeedsOutput(BindingMode mode) => mode != BindingMode.SetState;
+
+    /// <summary>Complete enough to run.</summary>
+    [JsonIgnore]
+    public bool IsComplete => (Input is not null || !NeedsInput(Mode)) && (Output is not null || !NeedsOutput(Mode));
+
+    /// <summary>Only active while these states are on/off (empty = always).</summary>
+    public List<StateCondition> Conditions { get; set; } = new();
     /// <summary>
     /// Stop the physical input from reaching other programs while this binding is active.
     /// Works for keyboard keys and mouse buttons (all devices via hooks, or one device via Interception).

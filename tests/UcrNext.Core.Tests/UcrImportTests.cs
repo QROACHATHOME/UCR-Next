@@ -138,7 +138,7 @@ public class UcrImportTests
                     <DeviceBinding IsBound="true" DeviceConfigurationGuid="cccccccc-0000-0000-0000-000000000003" KeyType="1" KeyValue="0" KeySubValue="0" />
                   </DeviceBindings>
                   <Plugins>
-                    <Plugin xsi:type="ButtonToEvent"><Outputs /><Filters /></Plugin>
+                    <Plugin xsi:type="MysteryPlugin"><Outputs /><Filters /></Plugin>
                   </Plugins>
                 </Mapping>
                 <Mapping Title="Brake">
@@ -292,7 +292,7 @@ public class UcrImportTests
         var high = Assert.Single(brake);                     // low output unbound
         Assert.Equal(OutputRef.Key(0x57), high.Output);      // scan 0x11 = W
         Assert.Equal(0.40, high.Settings.ButtonThreshold, 6);
-        Assert.Contains(r.Notes, n => n.Contains("ButtonToEvent") && n.Contains("not supported"));
+        Assert.Contains(r.Notes, n => n.Contains("MysteryPlugin") && n.Contains("not supported"));
         var gas = r.Profiles[0].Bindings.Single(b => b.Name == "Gas");
         Assert.True(gas.Settings.NonLinearSensitivity);    // UCR's curve is now reproduced exactly
         Assert.Equal(0.8, gas.Settings.Sensitivity, 6);
