@@ -80,6 +80,21 @@ public sealed class OutputOption
         OutputNames.All(vjoy).Select(o => new OutputOption(o)).ToList();
 }
 
+/// <summary>One output device a profile drives, with how many bindings use it.</summary>
+public sealed record OutputBadge(Wpf.Ui.Controls.SymbolRegular Icon, string Text, int Count)
+{
+    public string ToolTip => $"{Count} binding{(Count == 1 ? "" : "s")} → {Text}";
+
+    internal static (int Order, int Device, Wpf.Ui.Controls.SymbolRegular Icon, string Text) KeyOf(OutputRef o) => o.Target switch
+    {
+        OutputTarget.Xbox360 => (0, o.Device, Wpf.Ui.Controls.SymbolRegular.XboxController24, $"Xbox 360 #{o.Device + 1}"),
+        OutputTarget.DualShock4 => (1, o.Device, Wpf.Ui.Controls.SymbolRegular.Games24, $"DualShock 4 #{o.Device + 1}"),
+        OutputTarget.VJoy => (2, o.Device, Wpf.Ui.Controls.SymbolRegular.Joystick20, $"vJoy {o.Device}"),
+        OutputTarget.Keyboard => (3, 0, Wpf.Ui.Controls.SymbolRegular.Keyboard24, "Keyboard"),
+        _ => (4, 0, Wpf.Ui.Controls.SymbolRegular.CursorClick24, "Mouse"),
+    };
+}
+
 public sealed class BindingVm : Observable
 {
     private readonly Action<BindingVm> _changed;
@@ -412,7 +427,7 @@ public sealed class ProfileVm : Observable
 
     internal void Changed() => _changed(this);
 
-    private BindingVm NewBindingVm(Binding b) => new(b, this, _ => _changed(this));
+    private BindingVm NewBindingVm(Binding b) => new(b, this, _ => { Raise(nameof(Outputs)); Raise(nameof(HasNoOutputs)); _changed(this); });
 
     // ---- Groups ----
 
@@ -444,6 +459,7 @@ public sealed class ProfileVm : Observable
         foreach (var (g, list) in members) { Sync(g.Bindings, list); g.RefreshSummary(); }
         foreach (var b in Bindings) b.NotifyGroup();
         Raise(nameof(Summary)); Raise(nameof(GroupBrushes)); Raise(nameof(IsEmpty));
+        Raise(nameof(Outputs)); Raise(nameof(HasNoOutputs));
     }
 
     /// <summary>Makes <paramref name="target"/> equal to <paramref name="wanted"/> with as few changes as possible.</summary>
@@ -532,6 +548,19 @@ public sealed class ProfileVm : Observable
             return Model.Groups.Count == 0 ? s : s + $" · {Model.Groups.Count} group{(Model.Groups.Count == 1 ? "" : "s")}";
         }
     }
+
+    /// <summary>
+    /// What the profile produces, one badge per output device ("Xbox 360 #1", "Keyboard"…), so you can
+    /// tell at a glance whether it makes a controller, mouse or keyboard. Enabled bindings only.
+    /// </summary>
+    public IReadOnlyList<OutputBadge> Outputs => Model.Bindings
+        .Where(b => b.Enabled && b.Output is not null && Binding.NeedsOutput(b.Mode))
+        .GroupBy(b => OutputBadge.KeyOf(b.Output!))
+        .OrderBy(g => g.Key.Order).ThenBy(g => g.Key.Device)
+        .Select(g => new OutputBadge(g.Key.Icon, g.Key.Text, g.Count()))
+        .ToList();
+
+    public bool HasNoOutputs => Outputs.Count == 0;
 
     /// <summary>Colours of the profile's groups, for the dots in the profile list.</summary>
     public IReadOnlyList<Brush> GroupBrushes => Model.Groups.Select(g => (Brush)GroupColors.Brush(g.Color)).ToList();

@@ -167,6 +167,19 @@
                                             </ItemsControl>
                                             <TextBlock Text="{Binding Summary}" Style="{StaticResource Faint}" Margin="2,0,0,0" />
                                         </StackPanel>
+                                        <ItemsControl ItemsSource="{Binding Outputs}" Margin="0,3,0,1" ToolTip="What this profile outputs">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Orientation="Horizontal" Margin="0,0,8,1" ToolTip="{Binding ToolTip}">
+                                                        <ui:SymbolIcon Symbol="{Binding Icon}" FontSize="13" Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" />
+                                                        <TextBlock Text="{Binding Text}" FontSize="11" Margin="3,0,0,0" VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
                                         <TextBlock Text="{Binding AppsSummary}" Style="{StaticResource Faint}" TextTrimming="CharacterEllipsis" />
                                         <TextBlock Text="{Binding GamesSummary}" FontSize="11" Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" TextTrimming="CharacterEllipsis" />
                                     </StackPanel>
@@ -193,6 +206,29 @@
                         </StackPanel>
                         <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" FontSize="15" FontWeight="SemiBold"
                                  Margin="0,0,10,0" ToolTip="Profile name" />
+                    </DockPanel>
+                    <!-- What the profile outputs, at a glance -->
+                    <DockPanel DockPanel.Dock="Top" Margin="2,0,0,8">
+                        <TextBlock Text="Outputs:" Style="{StaticResource Faint}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                        <TextBlock Text="nothing yet — pick an output on a binding" Style="{StaticResource Faint}" VerticalAlignment="Center"
+                                   Visibility="{Binding HasNoOutputs, Converter={StaticResource BoolToVis}}" />
+                        <ItemsControl ItemsSource="{Binding Outputs}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border CornerRadius="10" Padding="8,2" Margin="0,0,6,2" ToolTip="{Binding ToolTip}"
+                                            Background="{DynamicResource ControlFillColorDefaultBrush}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <ui:SymbolIcon Symbol="{Binding Icon}" FontSize="15" Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" />
+                                            <TextBlock Text="{Binding Text}" Margin="5,0,0,0" VerticalAlignment="Center" />
+                                            <TextBlock Text="{Binding Count, StringFormat=' ({0})'}" Style="{StaticResource Faint}" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
                     </DockPanel>
                     <Expander DockPanel.Dock="Top" Header="Profile settings: programs, games, devices" Margin="0,0,0,8" IsExpanded="False">
                         <Grid Margin="4,6,4,2">
