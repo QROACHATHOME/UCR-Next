@@ -189,6 +189,26 @@ Exit code 0 = OK, 1 = error or UCR-Next not running, 2 = usage error. Handy for 
 launchers (e.g. HyperSpin/RocketLauncher pre-launch commands) and Stream Deck buttons:
 `ucrnext solo "Racing Wheel" && ucrnext start`.
 
+## Arcade panel (View → Arcade panel…, F2)
+
+Your control panel as it really looks, for linking and checking controls at the cabinet:
+
+- **Import from LED-Next…** reads LED-Next's `cabinet.json` (in LED-Next's `config` folder): every
+  control with its id (`P1_B1`, `P2_START`…), label, player, kind, position and the panel photo, so you
+  don't draw the panel twice. Importing again after moving buttons in LED-Next keeps the links you made here.
+- Or build it here: **Add**, drag, arrow keys to nudge (Shift = 10×), Tab to step through the
+  controls, Ctrl+D / Ctrl+C / Ctrl+V, Ctrl+Z / Ctrl+Y, **Set photo…** and the photo opacity.
+- **Link** each control to the input it produces: select it and press *Link…*, then press it on the
+  real panel. **Link all…** goes through every control that isn't linked yet, player by player. A
+  joystick asks for up, down, left and right; a spinner for one turn (per device, so two identical
+  spinners are told apart); a trackball for left/right and up/down. Controls that aren't linked yet
+  have a dashed orange ring.
+- **Live view**: controls light up white while you press them, so a miswired or wrongly linked
+  control shows at once.
+
+The panel is saved as `panel.json` (photo in `panel-images`) in `%APPDATA%\UCR-Next`, at once after
+each change. It doesn't change any bindings. Showing each profile's mapping on the panel comes next.
+
 ## Identical devices (two spinners, two sticks)
 
 Each joystick, mouse and keyboard gets an id made of its vendor and product number plus a key

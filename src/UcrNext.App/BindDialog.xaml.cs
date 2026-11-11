@@ -129,4 +129,11 @@ public partial class BindDialog : Window
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e) => DialogResult = false;
+
+    /// <summary>Replaces the "press a button…" text (e.g. "Press P1_B1 on the panel").</summary>
+    public string Prompt { get => PromptText.Text; set => PromptText.Text = value; }
+    /// <summary>Keyboard/mouse from any device (ticked) or from the one device used.</summary>
+    public bool AnyDevice { get => AnyDeviceBox.IsChecked == true; set => AnyDeviceBox.IsChecked = value; }
+    /// <summary>Also capture mouse / trackball / spinner movement.</summary>
+    public bool CaptureMovement { get => MovementBox.IsChecked == true; set => MovementBox.IsChecked = value; }
 }

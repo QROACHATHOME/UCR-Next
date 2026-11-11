@@ -36,6 +36,9 @@
                 <MenuItem Header="Group bindings by controller" Click="AutoGroup_Click" />
             </MenuItem>
             <MenuItem Header="_View">
+                <MenuItem Header="Arcade panel…" Click="Panel_Click" InputGestureText="F2"
+                          ToolTip="Your control panel as it looks: link each control to its input and see it light up when pressed" />
+                <Separator />
                 <MenuItem Header="Follow Windows (light or dark)" IsCheckable="True" IsChecked="{Binding ThemeSystem, Mode=OneWay}" Click="ThemeSystem_Click" />
                 <MenuItem Header="Light" IsCheckable="True" IsChecked="{Binding ThemeLight, Mode=OneWay}" Click="ThemeLight_Click" />
                 <MenuItem Header="Dark" IsCheckable="True" IsChecked="{Binding ThemeDark, Mode=OneWay}" Click="ThemeDark_Click" />

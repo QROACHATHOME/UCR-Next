@@ -24,6 +24,7 @@ public partial class MainWindow : Window
         _vm = vm;
         _app = app;
         DataContext = vm;
+        PreviewKeyDown += (_, e) => { if (e.Key == Key.F2) { ShowPanel(); e.Handled = true; } };
         vm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(MainViewModel.Selected)) AnimateProfileSwitch(); };
     }
 
@@ -67,6 +68,21 @@ public partial class MainWindow : Window
         Process.Start(new ProcessStartInfo(_vm.Services.Store.Directory) { UseShellExecute = true });
 
     private void TraySetting_Click(object sender, RoutedEventArgs e) => _app.ApplyTraySetting();
+
+    private PanelWindow? _panel;
+
+    private void Panel_Click(object sender, RoutedEventArgs e) => ShowPanel();
+
+    private void ShowPanel()
+    {
+        if (_panel is null)
+        {
+            _panel = new PanelWindow(_vm) { Owner = this };
+            _panel.Closed += (_, _) => _panel = null;
+        }
+        _panel.Show();
+        _panel.Activate();
+    }
 
     private void DeviceSlots_Click(object sender, RoutedEventArgs e)
     {
