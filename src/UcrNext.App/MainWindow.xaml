@@ -231,31 +231,51 @@
                         </ItemsControl>
                     </DockPanel>
                     <Expander DockPanel.Dock="Top" Header="Profile settings: programs, games, devices" Margin="0,0,0,8" IsExpanded="False">
-                        <Grid Margin="4,6,4,2">
+                        <!-- One setting per row: title and explanation on the left, the control on the right.
+                             Scrolls inside a limited height so the bindings below stay in view. -->
+                        <ScrollViewer MaxHeight="320" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <Grid Margin="6,10,14,6">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" /><ColumnDefinition Width="12" />
-                                <ColumnDefinition Width="*" /><ColumnDefinition Width="12" />
-                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="260" /><ColumnDefinition Width="20" /><ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0">
-                                <TextBlock Text="Only active while these programs are in front" FontWeight="SemiBold" TextWrapping="Wrap" />
-                                <TextBox Margin="0,4" Text="{Binding ApplicationsText, UpdateSourceTrigger=LostFocus}"
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <!-- Programs -->
+                            <StackPanel Grid.Row="0" Grid.Column="0">
+                                <TextBlock Text="Programs" FontWeight="SemiBold" />
+                                <TextBlock Text="Only active while one of these programs is in front. Empty = everywhere." Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                            </StackPanel>
+                            <StackPanel Grid.Row="0" Grid.Column="2">
+                                <TextBox Text="{Binding ApplicationsText, UpdateSourceTrigger=LostFocus}"
                                          ToolTip="Comma-separated, e.g. game.exe, emulator.exe. Leave empty to use the profile everywhere." />
-                                <Button HorizontalAlignment="Left" Content="Add running program ▾" Click="AddApp_Click" />
+                                <Button HorizontalAlignment="Left" Content="Add running program ▾" Click="AddApp_Click" Margin="0,8,0,0" />
                             </StackPanel>
-                            <StackPanel Grid.Column="2">
-                                <TextBlock Text="Games that use this profile (one per line)" FontWeight="SemiBold" TextWrapping="Wrap" />
-                                <TextBox Margin="0,4" Height="72" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"
-                                         Text="{Binding GamesText, UpdateSourceTrigger=LostFocus}"
-                                         ToolTip="For your reference, and for launchers: 'ucrnext game &quot;Game name&quot;' enables the profile(s) listing that game." />
+                            <Separator Grid.Row="1" Grid.ColumnSpan="3" Margin="0,14" Opacity="0.5" />
+
+                            <!-- Games -->
+                            <StackPanel Grid.Row="2" Grid.Column="0">
+                                <TextBlock Text="Games" FontWeight="SemiBold" />
+                                <TextBlock Text="Games that use this profile, one per line. Launchers can enable it with 'ucrnext game'." Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,3,0,0" />
                             </StackPanel>
-                            <StackPanel Grid.Column="4">
-                                <TextBlock Text="Skip this profile while connected" FontWeight="SemiBold" TextWrapping="Wrap"
-                                           ToolTip="If any of these devices is plugged in, the profile stays off and creates no virtual controller (e.g. your real wheel)." />
-                                <ItemsControl Margin="0,4" ItemsSource="{Binding SkipDevices}">
+                            <TextBox Grid.Row="2" Grid.Column="2" MinHeight="80" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"
+                                     Text="{Binding GamesText, UpdateSourceTrigger=LostFocus}"
+                                     ToolTip="For your reference, and for launchers: 'ucrnext game &quot;Game name&quot;' enables the profile(s) listing that game." />
+                            <Separator Grid.Row="3" Grid.ColumnSpan="3" Margin="0,14" Opacity="0.5" />
+
+                            <!-- Skip while connected -->
+                            <StackPanel Grid.Row="4" Grid.Column="0">
+                                <TextBlock Text="Skip while connected" FontWeight="SemiBold" />
+                                <TextBlock Text="The profile stays off, and creates no virtual controller, while any of these devices is plugged in (e.g. your real wheel)." Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                            </StackPanel>
+                            <StackPanel Grid.Row="4" Grid.Column="2">
+                                <ItemsControl ItemsSource="{Binding SkipDevices}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
-                                            <DockPanel Margin="0,1">
+                                            <DockPanel Margin="0,0,0,4">
                                                 <ui:Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Icon="{ui:SymbolIcon Dismiss16}"
                                                            Click="RemoveSkipDevice_Click" ToolTip="Remove" />
                                                 <TextBlock VerticalAlignment="Center" Text="{Binding}" ToolTip="{Binding DeviceId}" TextTrimming="CharacterEllipsis" />
@@ -264,12 +284,19 @@
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
                                 <Button HorizontalAlignment="Left" Content="Add connected device ▾" Click="AddSkipDevice_Click" />
-                                <CheckBox Margin="0,10,0,0" IsChecked="{Binding RequireDevices}"
-                                          ToolTip="The profile stays off until every controller its bindings read is connected, so no virtual pad is plugged in for a missing controller and real pads keep their Xbox slots.">
-                                    <TextBlock Text="Wait until its controllers are connected" TextWrapping="Wrap" />
-                                </CheckBox>
                             </StackPanel>
+                            <Separator Grid.Row="5" Grid.ColumnSpan="3" Margin="0,14" Opacity="0.5" />
+
+                            <!-- Wait for controllers -->
+                            <StackPanel Grid.Row="6" Grid.Column="0">
+                                <TextBlock Text="Wait for controllers" FontWeight="SemiBold" />
+                                <TextBlock Text="Stay off until every controller the bindings read is connected, so no virtual pad is plugged in for a missing controller." Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                            </StackPanel>
+                            <CheckBox Grid.Row="6" Grid.Column="2" VerticalAlignment="Top" IsChecked="{Binding RequireDevices}"
+                                      Content="Wait until its controllers are connected"
+                                      ToolTip="Real pads then keep their Xbox slots, because a virtual pad never takes a slot ahead of them." />
                         </Grid>
+                        </ScrollViewer>
                     </Expander>
 
                     <!-- Column titles -->
