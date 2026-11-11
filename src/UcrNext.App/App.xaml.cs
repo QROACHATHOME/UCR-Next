@@ -10,6 +10,8 @@ namespace UcrNext.App;
 ///   --start        turn mapping on immediately
 ///   --no-tray      no notification-area icon (control it with ucrnext.exe)
 ///   --profiles DIR use another profile folder
+///   -p / --profile "Parent,Child"   the original UCR's option: enable only that profile and start
+///                  mapping, in the background (so UCR-Next can stand in for UCR.exe; see UcrCompat)
 /// Only one instance runs per user; a second launch asks the first one to show its window
 /// (or to start mapping, with --start) and exits.
 /// </summary>
@@ -36,10 +38,19 @@ public partial class App : Application, IControlHost
         bool noTray = args.Contains("--no-tray");
         int pi = args.IndexOf("--profiles");
         string? profileDir = pi >= 0 && pi + 1 < args.Count ? args[pi + 1] : null;
+        string? ucrProfile = UcrCompat.ProfileArgument(args.Where((a, i) => i != pi && i != pi + 1 || pi < 0).ToList());
+        if (ucrProfile is not null) background = true; // called like UCR.exe by a frontend: don't pop up over the game
 
         _singleInstance = new Mutex(true, @"Local\UcrNext-" + Environment.UserName, out bool first);
         if (!first)
         {
+            if (ucrProfile is not null)
+            {
+                // The running copy may still be starting up (pipe not listening yet): keep trying for a while.
+                for (int i = 0; i < 20 && CommandPipe.Send("ucr " + CommandLine.Quote(ucrProfile)) is null; i++) Thread.Sleep(500);
+                Shutdown();
+                return;
+            }
             if (start) CommandPipe.Send("start");
             if (!background) CommandPipe.Send("show");
             Shutdown();
@@ -60,6 +71,7 @@ public partial class App : Application, IControlHost
         _startedInBackground = background;
         if (!noTray && (_services.Settings.ShowTrayIcon || background)) CreateTray();
         if (start || _services.Settings.StartMappingOnLaunch) _vm.IsMapping = true;
+        if (ucrProfile is not null) _vm.Status = processor.Execute("ucr " + CommandLine.Quote(ucrProfile));
         if (!background) ShowWindow();
     }
 

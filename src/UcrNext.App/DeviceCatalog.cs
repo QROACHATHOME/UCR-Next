@@ -23,8 +23,19 @@ public sealed class DeviceCatalog
 
     public event Action? Changed;
 
-    public DeviceCustomization? Get(string deviceId) =>
-        _s.Settings.Devices.TryGetValue(deviceId, out var c) ? c : null;
+    /// <summary>
+    /// What you saved for the device. A device can be known by two ids (its current one and the
+    /// older "VID:PID#n" one), so the other id of a connected device is tried as well.
+    /// </summary>
+    public DeviceCustomization? Get(string deviceId)
+    {
+        if (_s.Settings.Devices.TryGetValue(deviceId, out var c)) return c;
+        var d = _s.Inputs.Devices.FirstOrDefault(x => x.Is(deviceId));
+        if (d is null) return null;
+        foreach (var other in new[] { d.DeviceId, d.AltId })
+            if (other is not null && other != deviceId && _s.Settings.Devices.TryGetValue(other, out c)) return c;
+        return null;
+    }
 
     /// <summary>Your name for the device, or null.</summary>
     public string? Alias(string deviceId) => Get(deviceId)?.Name is { Length: > 0 } n ? n : null;
@@ -63,11 +74,18 @@ public sealed class DeviceCatalog
     {
         if (Get(deviceId) is { } c) DeleteImageFile(c.Image);
         _s.Settings.Devices.Remove(deviceId);
+        if (_s.Inputs.Devices.FirstOrDefault(x => x.Is(deviceId)) is { } d)
+        {
+            _s.Settings.Devices.Remove(d.DeviceId);
+            if (d.AltId is not null) _s.Settings.Devices.Remove(d.AltId);
+        }
         Save();
     }
 
     private void Store(string deviceId, DeviceCustomization c)
     {
+        // Saved under the current id from now on; drop a copy kept under the older id.
+        if (_s.Inputs.Devices.FirstOrDefault(x => x.DeviceId == deviceId)?.AltId is { } alt) _s.Settings.Devices.Remove(alt);
         if (c.IsEmpty) _s.Settings.Devices.Remove(deviceId);
         else _s.Settings.Devices[deviceId] = c;
         Save();

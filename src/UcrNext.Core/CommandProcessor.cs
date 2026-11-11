@@ -34,6 +34,7 @@ public sealed class CommandProcessor
         "  enable <profile>       enable a profile\n" +
         "  disable <profile>      disable a profile\n" +
         "  solo <profile>         enable only this profile, disable all others\n" +
+        "  ucr <Parent,Child>     like UCR.exe --profile: enable only that profile and start mapping\n" +
         "  games                  list games and the profiles they use\n" +
         "  game <game> [--start]  enable only the profile(s) listed for this game\n" +
         "  import <context.xml> [--per-device]   import UCR profiles\n" +
@@ -44,6 +45,7 @@ public sealed class CommandProcessor
         "Profile names are case-insensitive; a unique prefix is enough. Quote names with spaces.";
 
     private readonly IControlHost _host;
+    private bool _ucrImported; // UCR's context.xml is imported at most once per run
 
     public CommandProcessor(IControlHost host) => _host = host;
 
@@ -85,6 +87,25 @@ public sealed class CommandProcessor
                 if (p is null) return err!;
                 foreach (var other in _host.Profiles) _host.SetProfileEnabled(other, ReferenceEquals(other, p));
                 return $"Only \"{p.Name}\" is enabled";
+            }
+            case "ucr":
+            {
+                // What "UCR.exe --profile Parent,Child" does: load that profile (only it) and map.
+                string search = string.Join(" ", args.Skip(1));
+                var p = UcrCompat.FindProfile(_host.Profiles, search);
+                string imported = "";
+                if (p is null && !_ucrImported && UcrCompat.ContextNextToExe is { } ctx)
+                {
+                    // Installed in place of UCR: its context.xml is still here, so import it once.
+                    _ucrImported = true;
+                    _host.ImportUcr(ctx, false);
+                    imported = " (imported UCR's context.xml)";
+                    p = UcrCompat.FindProfile(_host.Profiles, search);
+                }
+                if (p is null) return $"error: no profile matches \"{search}\" (UCR names: Parent,Child){imported}";
+                foreach (var other in _host.Profiles) _host.SetProfileEnabled(other, ReferenceEquals(other, p));
+                _host.IsMapping = true;
+                return $"Loaded \"{p.Name}\" — mapping ON{imported}";
             }
             case "games":
                 return ListGames();

@@ -22,4 +22,12 @@
   <ItemGroup>
     <PackageReference Include="WPF-UI" Version="4.3.0" />
   </ItemGroup>
+  <!-- UCR.exe: the same program under the original UCR's name, so frontends that run
+       "UCR.exe -p Profile" start UCR-Next when it is installed in UCR's folder (see README). -->
+  <Target Name="CopyUcrAlias" AfterTargets="Build">
+    <Copy SourceFiles="$(OutDir)$(AssemblyName).exe" DestinationFiles="$(OutDir)UCR.exe" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="PublishUcrAlias" AfterTargets="Publish">
+    <Copy SourceFiles="$(PublishDir)$(AssemblyName).exe" DestinationFiles="$(PublishDir)UCR.exe" SkipUnchangedFiles="true" />
+  </Target>
 </Project>

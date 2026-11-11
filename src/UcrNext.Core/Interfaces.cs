@@ -1,7 +1,13 @@
 namespace UcrNext.Core;
 
 /// <summary>Describes one physical input device.</summary>
-public sealed record DeviceInfo(string DeviceId, string Name, string Provider, int Buttons, int Axes);
+/// <param name="AltId">An older id the same device was known by (e.g. "rawmouse:VID:PID#2"), still accepted in bindings.</param>
+public sealed record DeviceInfo(string DeviceId, string Name, string Provider, int Buttons, int Axes, string? AltId = null)
+{
+    /// <summary>True if <paramref name="id"/> is this device's id or its older id.</summary>
+    public bool Is(string id) =>
+        string.Equals(DeviceId, id, StringComparison.OrdinalIgnoreCase) || (AltId is not null && string.Equals(AltId, id, StringComparison.OrdinalIgnoreCase));
+}
 
 /// <summary>Something that can read the current value of physical inputs.</summary>
 public interface IInputSource

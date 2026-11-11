@@ -19,8 +19,8 @@ Status: **0.5**. Windows 10/11 only.
     4 POV hats each (falls back to the WinMM joystick API if DirectInput is unavailable)
   - Keyboard and mouse buttons through low-level hooks ("any keyboard / any mouse")
   - **Mouse / trackball / spinner movement and the mouse wheel** through Raw Input — no driver
-    needed, any mouse or one specific mouse (`rawmouse:VID:PID#n`)
-  - **Per-keyboard keys** through Raw Input (`rawkbd:VID:PID#n`) — no driver needed, but read-only:
+    needed, any mouse or one specific mouse (`rawmouse:VID:PID@…`)
+  - **Per-keyboard keys** through Raw Input (`rawkbd:VID:PID@…`) — no driver needed, but read-only:
     the original key still reaches other programs. To block keys on one keyboard only, use Interception.
   - **Per-device** keyboards and mice through the optional **Interception** driver
 - **Outputs**: keyboard, mouse buttons, mouse movement and **mouse wheel** (one notch per button press,
@@ -172,6 +172,7 @@ ucrnext profiles               list profiles ([x] = enabled, apps they are limit
 ucrnext enable <profile>       enable a profile   (case-insensitive, unique prefix is enough,
 ucrnext disable <profile>      disable a profile   quote names with spaces)
 ucrnext solo <profile>         enable only this profile
+ucrnext ucr "Parent,Child"     like UCR.exe --profile: only that profile, mapping on
 ucrnext games                  list games and the profiles they use
 ucrnext game <game> [--start]  enable only the profile(s) listing this game (exact, or unique partial name)
 ucrnext import <context.xml> [--per-device]   import UCR profiles (works even when UCR-Next is closed)
@@ -188,6 +189,26 @@ Exit code 0 = OK, 1 = error or UCR-Next not running, 2 = usage error. Handy for 
 launchers (e.g. HyperSpin/RocketLauncher pre-launch commands) and Stream Deck buttons:
 `ucrnext solo "Racing Wheel" && ucrnext start`.
 
+## Identical devices (two spinners, two sticks)
+
+Each joystick, mouse and keyboard gets an id made of its vendor and product number plus a key
+for that one physical device, e.g. `rawmouse:1241:1111@P3A1B2C4D`:
+
+- `@` followed by the device's **USB serial number**, if it reports one. The id is then the same in
+  every USB port.
+- `@P…`: no serial number (common for spinners and encoders), so the key comes from the **USB port**
+  the device is plugged into. The id is the same as long as the device stays in that port.
+
+So two identical spinners keep their identity however Windows happens to list them, after reboots
+and after unplugging. (UCR, and UCR-Next before 0.10, numbered them `#1`, `#2` in the order Windows
+listed them, so they could swap.) Moving a device without a serial number to another port makes it
+show up as a new device instead of taking the other one's place. A device slot (*Settings → Device
+slots*) is the quickest way to point your bindings at it again.
+
+Older ids such as `dinput:VID:PID#2` (from earlier versions and from UCR imports) still work: they
+mean the n-th of the identical devices in key order. Bind again, or use a device slot, to get the
+stable id. After updating, check once that identical devices are the right way round.
+
 ## Profile settings: programs, games, devices
 
 Expand **Profile settings** above the bindings list:
@@ -198,8 +219,7 @@ Expand **Profile settings** above the bindings list:
   Handy as a launcher pre-launch command (HyperSpin/RocketLauncher, LaunchBox, Playnite…).
 - **Skip this profile while connected** — *Add connected device* picks a plugged-in controller.
   While any listed device is connected the profile is inactive and no virtual controller is created for
-  it. Devices are matched by id (`dinput:VID:PID#n`, so moving the wheel to another USB port is fine)
-  or by name. `ucrnext status` shows "Skipped (device connected)".
+  it. Devices are matched by id (see *Identical devices* below) or by name. `ucrnext status` shows "Skipped (device connected)".
 - **Wait until its controllers are connected** — see above; `ucrnext status` shows "Waiting for their controllers".
 
 ### Virtual pads and leftover ("ghost") controllers
@@ -232,6 +252,35 @@ use *File → Import UCR profiles…*, or `ucrnext import path\to\context.xml`.
 | Plugin filters | *Only while states* on the bindings; Button/Axis to Filter become *SetState* bindings. Unlike UCR, a binding switched off by a state releases its output instead of freezing it |
 | Events | mouse wheel up/down/left/right: Button to Event → wheel output (one notch per press/release), Event to Button → a pulse of the hold time |
 | Not converted (reported) | unknown third-party plugins |
+
+## Replacing UCR.exe (frontends keep working)
+
+Frontends and launch scripts that start the original UCR with a profile keep working unchanged:
+
+```
+UCR.exe --profile "Parent,Child"      (also -p, /p, --profile=…, -p:…)
+```
+
+UCR-Next ships a copy of itself named `UCR.exe` that understands this. As UCR does, the name is
+matched without regard to case, a comma separates a child profile from its parent, and if the
+child isn't found the deepest profile that matched is used. UCR-Next then enables only that
+profile, turns mapping on and stays in the background (tray), so no window pops up over the game.
+If UCR-Next is already running, the new `UCR.exe` passes the request to it and exits, as UCR does.
+Closing or killing `UCR.exe` stops mapping, and its virtual pads are unplugged.
+
+**Install in place of UCR**
+
+1. Close UCR.
+2. Rename UCR's folder, e.g. `C:\UCR` → `C:\UCR-original`. Nothing in it is changed or deleted.
+3. Unzip UCR-Next into a new folder with the old name (`C:\UCR`). It contains `UCR.exe`.
+4. Copy `context.xml` from `C:\UCR-original` into `C:\UCR`. The first time a profile is asked for
+   that UCR-Next doesn't have, it imports this file once and tries again. You can also import it
+   yourself (*File → Import UCR profiles…*), for example to choose per-device keyboards.
+5. Test it with `C:\UCR\UCR.exe -p "Your profile"`, then `ucrnext status`.
+
+**Roll back:** exit UCR-Next (tray icon → Exit, or `ucrnext quit`), rename `C:\UCR` to `C:\UCR-Next`
+(or delete it), and rename `C:\UCR-original` back to `C:\UCR`. UCR-Next's own profiles and settings
+live in `%APPDATA%\UCR-Next`, not in the program folder, so both stay as they were.
 
 ## Running in the background / with Windows
 

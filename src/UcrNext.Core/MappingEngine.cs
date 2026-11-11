@@ -697,7 +697,7 @@ public sealed class MappingEngine
         var forApp = Enumerable.Range(0, _profiles.Length).Where(i => Profile.AppliesTo(_profiles[i].Apps, fg)).ToArray();
         var skipped = forApp.Where(i => Profile.SkippedByDevices(_profiles[i].Skip, devices)).ToArray();
         var slots = ResolveSlots(devices);
-        var present = devices.Select(d => d.DeviceId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var present = devices.Select(d => d.DeviceId).Concat(devices.Select(d => d.AltId).OfType<string>()).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         // Slot inputs filled in, plus one copy per connected shadow device.
         var expanded = new Dictionary<int, List<Binding>>();
@@ -772,10 +772,9 @@ public sealed class MappingEngine
             var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             string? Find(DeviceMatch m)
             {
-                var d = devices.FirstOrDefault(x => m.DeviceId.Length > 0 && string.Equals(x.DeviceId, m.DeviceId, StringComparison.OrdinalIgnoreCase) && !used.Contains(x.DeviceId))
+                var d = devices.FirstOrDefault(x => m.DeviceId.Length > 0 && x.Is(m.DeviceId) && !used.Contains(x.DeviceId))
                      ?? devices.FirstOrDefault(x => m.Name.Length > 0 && string.Equals(x.Name, m.Name, StringComparison.OrdinalIgnoreCase) && !used.Contains(x.DeviceId)
-                                                    && !_slots.Any(o => string.Equals(o.Device.DeviceId, x.DeviceId, StringComparison.OrdinalIgnoreCase)
-                                                                     || o.Shadows.Any(sh => string.Equals(sh.DeviceId, x.DeviceId, StringComparison.OrdinalIgnoreCase))));
+                                                    && !_slots.Any(o => x.Is(o.Device.DeviceId) || o.Shadows.Any(sh => x.Is(sh.DeviceId))));
                 if (d is null && AlwaysPresent(m.DeviceId)) return m.DeviceId;
                 if (d is not null) used.Add(d.DeviceId);
                 return d?.DeviceId;

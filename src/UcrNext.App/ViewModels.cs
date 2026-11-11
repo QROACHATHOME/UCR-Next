@@ -1016,7 +1016,8 @@ public sealed class MainViewModel : Observable
             if (r.Slot is { } n)
                 return renames.TryGetValue(n, out var to) ? new InputRef(InputRef.SlotId(to), r.Kind, r.Index, r.Label) : null;
             if (!convert) return null;
-            var slot = slots.FirstOrDefault(sl => sl.Device.DeviceId.Length > 0 && string.Equals(sl.Device.DeviceId, r.DeviceId, StringComparison.OrdinalIgnoreCase));
+            bool Same(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase) || Devices.Any(d => d.Is(a) && d.Is(b));
+            var slot = slots.FirstOrDefault(sl => sl.Device.DeviceId.Length > 0 && Same(sl.Device.DeviceId, r.DeviceId));
             return slot is null ? null : new InputRef(InputRef.SlotId(slot.Name), r.Kind, r.Index, r.Label);
         }
         int changed = 0;
@@ -1141,7 +1142,7 @@ public sealed class MainViewModel : Observable
             return $"Slot \"{slotName}\": " + (dev.Length == 0 || dev == deviceId ? "no controller" : DeviceLabel(dev));
         }
         if (Catalog.Alias(deviceId) is { } alias) return alias;
-        var d = Devices.FirstOrDefault(x => string.Equals(x.DeviceId, deviceId, StringComparison.OrdinalIgnoreCase));
+        var d = Devices.FirstOrDefault(x => x.Is(deviceId));
         if (d is not null && !string.IsNullOrWhiteSpace(d.Name)) return d.Name;
         if (deviceId == KeyboardMouseHookProvider.KeyboardId) return "Keyboard";
         if (deviceId == KeyboardMouseHookProvider.MouseId) return "Mouse";

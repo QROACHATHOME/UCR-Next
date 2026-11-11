@@ -8,11 +8,15 @@ namespace UcrNext.Devices;
 /// Per-device keyboards and mice through Windows Raw Input — no driver needed, but read-only
 /// (Raw Input cannot stop the original key/click from reaching other programs; use Interception for that).
 ///
-/// Mice ("rawmouse:VID:PID#n", or "mouse" = any mouse):
+/// Device ids are "rawmouse:VID:PID@KEY" / "rawkbd:VID:PID@KEY", where KEY is the device's USB serial
+/// number or, without one, a hash of the USB port it is in (see <see cref="DeviceKeys"/>), so two
+/// identical spinners never swap. The older "VID:PID#n" ids still work: n counts identical devices
+/// in KEY order.
+/// Mice ("rawmouse:…", or "mouse" = any mouse):
 ///  - Delta inputs: index 0 = X, 1 = Y (counts since the last engine tick).
 ///  - Buttons: 0-4 = Left, Right, Middle, X1, X2 (per device only — "any mouse" buttons come from the
 ///    hooks, which can also block); 5-8 = Wheel Up, Wheel Down, Wheel Right, Wheel Left (short pulses).
-/// Keyboards ("rawkbd:VID:PID#n"):
+/// Keyboards ("rawkbd:…"):
 ///  - Buttons indexed by scan code | 0x100 for E0 keys | 0x200 for E1 — the same scheme as the
 ///    Interception provider, so per-keyboard bindings carry over between the two.
 ///
@@ -32,6 +36,12 @@ public sealed class RawInputProvider : IInputProvider, IDeltaSource, IDisposable
     {
         public required string Id;
         public required string Name;
+        /// <summary>Older "VID:PID#n" id (n by key order among identical devices).</summary>
+        public string AltId = "";
+        public string VidPid = "";
+        public string BaseName = "";
+        public string Key = "";
+        public string Path = "";
         public required bool IsKeyboard;
         public double PendX, PendY, CurX, CurY, BindX, BindY;
         public int PendN, CurN;
@@ -43,7 +53,6 @@ public sealed class RawInputProvider : IInputProvider, IDeltaSource, IDisposable
     private readonly object _lock = new();
     private readonly Dictionary<IntPtr, Dev> _byHandle = new();
     private readonly Dev _any = new() { Id = AnyMouse, Name = "Mouse (all mice)", IsKeyboard = false };
-    private readonly Dictionary<string, int> _ordinals = new();
     private IntPtr _hwnd;
     private WndProc? _wndProc; // keep alive
     private IReadOnlyList<DeviceInfo> _devices = Array.Empty<DeviceInfo>();
@@ -149,24 +158,61 @@ public sealed class RawInputProvider : IInputProvider, IDeltaSource, IDisposable
         if (_byHandle.TryGetValue(handle, out var d)) return d;
         string path = DeviceName(handle) ?? "";
         var m = Regex.Match(path, @"VID_([0-9A-F]{4}).*?PID_([0-9A-F]{4})", RegexOptions.IgnoreCase);
-        string key = m.Success ? $"{m.Groups[1].Value.ToUpperInvariant()}:{m.Groups[2].Value.ToUpperInvariant()}" : "0000:0000";
+        string vidPid = m.Success ? $"{m.Groups[1].Value.ToUpperInvariant()}:{m.Groups[2].Value.ToUpperInvariant()}" : "0000:0000";
         string prefix = keyboard ? KeyboardPrefix : MousePrefix;
-        int n = _ordinals[prefix + key] = _ordinals.TryGetValue(prefix + key, out var c) ? c + 1 : 1;
+        string stable = path.Length > 0 ? DeviceKeys.For(path).Value : "H" + handle.ToInt64().ToString("X");
+        string id = $"{prefix}{vidPid}@{stable}";
+
+        // Unplugged and plugged back in: same device, new handle — keep its entry (and state).
+        // (Another live device with the same key — e.g. two clones reporting one serial — gets a distinct id.)
+        var same = _byHandle.FirstOrDefault(kv => kv.Value.Id == id);
+        if (same.Value is not null)
+        {
+            if (same.Value.Path == path || DeviceName(same.Key) is null)
+            {
+                _byHandle.Remove(same.Key);
+                _byHandle[handle] = same.Value;
+                same.Value.Path = path;
+                return same.Value;
+            }
+            stable += "~" + DeviceKeys.Hash(path);
+            id = $"{prefix}{vidPid}@{stable}";
+        }
+
         string kind = keyboard ? "Keyboard" : "Mouse";
-        // The product name the device reports ("I-PAC 2 (Ultimarc)"); the id keeps VID:PID so bindings don't change.
+        // The product name the device reports ("I-PAC 2 (Ultimarc)").
         string? product = m.Success ? HidNames.Describe(path) : null;
         d = new Dev
         {
-            Id = $"{prefix}{key}#{n}",
-            Name = (product is not null ? $"{product} ({kind.ToLowerInvariant()})"
-                    : m.Success ? $"{kind} {key}" : $"{kind} (built-in / unknown)") + (n > 1 ? $" #{n}" : ""),
+            Id = id,
+            VidPid = prefix + vidPid,
+            Key = stable,
+            Path = path,
+            BaseName = product is not null ? $"{product} ({kind.ToLowerInvariant()})"
+                     : m.Success ? $"{kind} {vidPid}" : $"{kind} (built-in / unknown)",
+            Name = "",
             IsKeyboard = keyboard,
             Keys = keyboard ? new bool[MaxKey] : null,
         };
         _byHandle[handle] = d;
-        _devices = _byHandle.Values.OrderBy(x => x.IsKeyboard).ThenBy(x => x.Id)
-            .Select(x => new DeviceInfo(x.Id, x.Name, Name, x.IsKeyboard ? 256 : 9, x.IsKeyboard ? 0 : 2)).ToList();
+        Renumber();
         return d;
+    }
+
+    /// <summary>Identical devices: "#n" in KEY order, for names and the older ids.</summary>
+    private void Renumber()
+    {
+        foreach (var group in _byHandle.Values.GroupBy(x => x.VidPid))
+        {
+            var ordered = group.OrderBy(x => x.Key, StringComparer.Ordinal).ToList();
+            for (int i = 0; i < ordered.Count; i++)
+            {
+                ordered[i].AltId = $"{ordered[i].VidPid}#{i + 1}";
+                ordered[i].Name = ordered[i].BaseName + (ordered.Count > 1 ? $" #{i + 1}" : "");
+            }
+        }
+        _devices = _byHandle.Values.OrderBy(x => x.IsKeyboard).ThenBy(x => x.Id)
+            .Select(x => new DeviceInfo(x.Id, x.Name, Name, x.IsKeyboard ? 256 : 9, x.IsKeyboard ? 0 : 2, x.AltId)).ToList();
     }
 
     private void Rescan()
@@ -176,8 +222,15 @@ public sealed class RawInputProvider : IInputProvider, IDeltaSource, IDisposable
         var list = new RAWINPUTDEVICELIST[count];
         if (GetRawInputDeviceList(list, ref count, cb) == unchecked((uint)-1)) return;
         lock (_lock)
-            foreach (var d in list.Take((int)count).Where(d => d.dwType is RIM_TYPEMOUSE or RIM_TYPEKEYBOARD))
-                DevFor(d.hDevice, d.dwType == RIM_TYPEKEYBOARD);
+        {
+            var current = list.Take((int)count).Where(d => d.dwType is RIM_TYPEMOUSE or RIM_TYPEKEYBOARD).ToList();
+            foreach (var d in current) DevFor(d.hDevice, d.dwType == RIM_TYPEKEYBOARD);
+            // Forget unplugged devices, so their numbers don't stick to the ones still there.
+            var live = current.Select(d => d.hDevice).ToHashSet();
+            var gone = _byHandle.Keys.Where(h => !live.Contains(h)).ToList();
+            foreach (var h in gone) _byHandle.Remove(h);
+            if (gone.Count > 0) Renumber();
+        }
     }
 
     /// <summary>Called by the engine thread each tick: publishes the movement gathered since the last tick.</summary>
@@ -196,7 +249,8 @@ public sealed class RawInputProvider : IInputProvider, IDeltaSource, IDisposable
         if (now >= _nextScan) { _nextScan = now + 5000; try { Rescan(); } catch { } }
     }
 
-    private Dev? Find(string id) => id == AnyMouse ? _any : _byHandle.Values.FirstOrDefault(d => d.Id == id);
+    private Dev? Find(string id) => id == AnyMouse ? _any
+        : _byHandle.Values.FirstOrDefault(d => d.Id == id) ?? _byHandle.Values.FirstOrDefault(d => d.AltId == id);
 
     public bool TryReadDelta(InputRef input, out double sum, out int events)
     {

@@ -96,7 +96,8 @@ public sealed class SlotsDialog : Window
         Choice? selected = items[0];
         if (current is not null && (current.DeviceId.Length > 0 || current.Name.Length > 0))
         {
-            selected = items.Skip(1).FirstOrDefault(c => string.Equals(c.Match!.DeviceId, current.DeviceId, StringComparison.OrdinalIgnoreCase))
+            selected = items.Skip(1).FirstOrDefault(c => string.Equals(c.Match!.DeviceId, current.DeviceId, StringComparison.OrdinalIgnoreCase)
+                                                      || _devices.Any(d => d.DeviceId == c.Match.DeviceId && d.Is(current.DeviceId)))
                     ?? items.Skip(1).FirstOrDefault(c => current.Name.Length > 0 && string.Equals(c.Match!.Name, current.Name, StringComparison.OrdinalIgnoreCase));
             if (selected is null)
             {

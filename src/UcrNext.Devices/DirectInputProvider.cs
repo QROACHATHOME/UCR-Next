@@ -26,6 +26,10 @@ public sealed class DirectInputProvider : IInputProvider, IDisposable
         public required Guid Instance;
         public required int Vid, Pid;
         public string DeviceId = "";
+        /// <summary>Older "dinput:VID:PID#n" id (n in key order among identical devices).</summary>
+        public string AltId = "";
+        /// <summary>USB serial number or port hash (see DeviceKeys).</summary>
+        public string Key = "";
         public required string BaseName;
         public string Name = "";
         public int Buttons, Povs;
@@ -61,8 +65,10 @@ public sealed class DirectInputProvider : IInputProvider, IDisposable
     public string Name => "DirectInput";
     public IReadOnlyList<DeviceInfo> Devices => _devices;
 
-    /// <summary>"dinput:046D:C24F#1" — vendor id, product id, 1-based instance among identical devices.</summary>
+    /// <summary>"dinput:046D:C24F#1" — vendor id, product id, 1-based instance among identical devices (older ids, still accepted).</summary>
     public static string DeviceId(int vid, int pid, int instance) => $"dinput:{vid:X4}:{pid:X4}#{instance}";
+    /// <summary>"dinput:046D:C24F@KEY" — KEY = USB serial number or USB port, so identical sticks never swap.</summary>
+    public static string StableId(int vid, int pid, string key) => $"dinput:{vid:X4}:{pid:X4}@{key}";
 
     public void Poll()
     {
@@ -125,23 +131,28 @@ public sealed class DirectInputProvider : IInputProvider, IDisposable
             try { gone.Device.Unacquire(); gone.Device.Dispose(); } catch { }
         }
 
-        // Ids are VID/PID + instance number (like UCR), so they survive moving the device to
-        // another USB port. Identical controllers get "#2", "#3"… in both id and name.
+        // Ids are VID/PID + the device's USB serial number or USB port, so identical controllers
+        // keep their identity however Windows happens to list them. "#n" (in key order) remains
+        // as the older id and in the name.
         foreach (var group in keep.GroupBy(p => (p.Vid, p.Pid)))
         {
             int n = 0;
-            foreach (var p in group) p.DeviceId = DeviceId(p.Vid, p.Pid, ++n);
+            foreach (var p in group.OrderBy(p => p.Key, StringComparer.Ordinal))
+            {
+                p.AltId = DeviceId(p.Vid, p.Pid, ++n);
+                p.DeviceId = StableId(p.Vid, p.Pid, p.Key);
+            }
         }
         foreach (var group in keep.GroupBy(p => p.BaseName))
         {
             int n = 0;
-            foreach (var p in group) p.Name = ++n == 1 ? p.BaseName : $"{p.BaseName} #{n}";
+            foreach (var p in group.OrderBy(p => p.Key, StringComparer.Ordinal)) p.Name = ++n == 1 ? p.BaseName : $"{p.BaseName} #{n}";
         }
 
         lock (_lock)
         {
             _pads = keep;
-            _devices = keep.Select(p => new DeviceInfo(p.DeviceId, p.Name, Name, p.Buttons + p.Povs * 4, p.AxisPresent.Count(x => x))).ToList();
+            _devices = keep.Select(p => new DeviceInfo(p.DeviceId, p.Name, Name, p.Buttons + p.Povs * 4, p.AxisPresent.Count(x => x), p.AltId)).ToList();
         }
     }
 
@@ -161,6 +172,9 @@ public sealed class DirectInputProvider : IInputProvider, IDisposable
             int vid = 0, pid = 0;
             try { vid = dev.Properties.VendorId; pid = dev.Properties.ProductId; } catch { }
             var pad = new Pad { Device = dev, Instance = inst.InstanceGuid, Vid = vid, Pid = pid, BaseName = inst.ProductName.Trim() };
+            string? path = null;
+            try { path = dev.Properties.InterfacePath; } catch { }
+            pad.Key = string.IsNullOrEmpty(path) ? "G" + DeviceKeys.Hash(inst.InstanceGuid.ToString()) : DeviceKeys.For(path).Value;
             foreach (var obj in dev.GetObjects(DeviceObjectTypeFlags.Axis))
             {
                 int slot = AxisSlot(obj.ObjectType, obj.Offset);
@@ -200,7 +214,7 @@ public sealed class DirectInputProvider : IInputProvider, IDisposable
         if (!input.DeviceId.StartsWith("dinput:", StringComparison.Ordinal)) return false;
         lock (_lock)
         {
-            var p = _pads.FirstOrDefault(x => x.DeviceId == input.DeviceId);
+            var p = _pads.FirstOrDefault(x => (x.DeviceId == input.DeviceId || x.AltId == input.DeviceId));
             if (p is not null) value = Read(p, input.Kind, input.Index);
         }
         return true;

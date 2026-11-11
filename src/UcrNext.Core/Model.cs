@@ -338,7 +338,7 @@ public sealed class DeviceMatch
     public string Name { get; set; } = "";
 
     public bool Matches(DeviceInfo d) =>
-        (!string.IsNullOrEmpty(DeviceId) && string.Equals(d.DeviceId, DeviceId, StringComparison.OrdinalIgnoreCase)) ||
+        (!string.IsNullOrEmpty(DeviceId) && d.Is(DeviceId)) ||
         (!string.IsNullOrEmpty(Name) && string.Equals(d.Name, Name, StringComparison.OrdinalIgnoreCase));
 
     public override string ToString() => string.IsNullOrEmpty(Name) ? DeviceId : Name;
