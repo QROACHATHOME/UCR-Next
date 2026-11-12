@@ -197,7 +197,7 @@ Your control panel as it really looks, for linking and checking controls at the 
   control with its id (`P1_B1`, `P2_START`…), label, player, kind, position and the panel photo, so you
   don't draw the panel twice. Importing again after moving buttons in LED-Next keeps the links you made here.
 - Or build it here: **Add**, drag, arrow keys to nudge (Shift = 10×), Tab to step through the
-  controls, Ctrl+D / Ctrl+C / Ctrl+V, Ctrl+Z / Ctrl+Y, **Set photo…** and the photo opacity.
+  controls, Ctrl+D / Ctrl+C / Ctrl+V, Ctrl+Z / Ctrl+Y, Esc to deselect, **Set photo…** and the photo opacity.
 - **Link** each control to the input it produces: select it and press *Link…*, then press it on the
   real panel. **Link all…** goes through every control that isn't linked yet, player by player. A
   joystick asks for up, down, left and right; a spinner for one turn (per device, so two identical
@@ -205,9 +205,15 @@ Your control panel as it really looks, for linking and checking controls at the 
   have a dashed orange ring.
 - **Live view**: controls light up white while you press them, so a miswired or wrongly linked
   control shows at once.
+- **Profile view**: pick a profile at the top and every linked control is labelled with what it does
+  in that profile (`A`, `Z`, `LeftX`, `Wheel Down`…; hover for the full list). Select a control to
+  change its output or open its settings, or press **Add binding** if it does nothing yet: the new
+  binding reads that control and its output list opens. Double-click a control does the same.
+  Ctrl+S (or **Save profiles**) saves, like Save in the main window.
 
 The panel is saved as `panel.json` (photo in `panel-images`) in `%APPDATA%\UCR-Next`, at once after
-each change. It doesn't change any bindings. Showing each profile's mapping on the panel comes next.
+each change. Moving or linking controls never changes bindings; only the profile view's output and
+Add binding do.
 
 ## Identical devices (two spinners, two sticks)
 

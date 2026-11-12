@@ -22,6 +22,18 @@ public static class OutputNames
         _ => "?",
     };
 
+    /// <summary>The output without its device: "A", "Z", "LeftX", "Button 3", "Mouse Left" (for small labels).</summary>
+    public static string Short(OutputRef o)
+    {
+        var text = Describe(o);
+        int colon = text.IndexOf(": ", StringComparison.Ordinal);
+        if (colon >= 0) text = text[(colon + 2)..];
+        int paren = text.IndexOf(" (", StringComparison.Ordinal);
+        if (paren > 0) text = text[..paren];
+        if (o.Target != OutputTarget.Mouse) return text;
+        return o.Kind == OutputKind.Button && o.Index >= (int)MouseButton.WheelUp ? "Wheel " + text : "Mouse " + text;
+    }
+
     private static readonly string[] PovDirections = { "Up", "Right", "Down", "Left" };
 
     private static string Ds4ButtonName(int i) => (Ds4Button)i switch

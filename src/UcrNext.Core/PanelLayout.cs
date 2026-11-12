@@ -190,3 +190,43 @@ public sealed class PanelLayout
         }).ToList();
     }
 }
+
+/// <summary>What a profile does with the controls on the panel.</summary>
+public static class PanelMapping
+{
+    /// <summary>
+    /// The bindings of <paramref name="profile"/> that read one of the control's linked inputs (main or extra input),
+    /// each with the parts of the control it covers, in profile order. <paramref name="resolve"/> turns a slot id
+    /// into the device filling it, so a link made to a slot matches a binding made to the device, and the other way round.
+    /// </summary>
+    public static List<(Binding Binding, string[] Parts)> BindingsFor(PanelControl control, Profile profile, Func<string, string> resolve)
+    {
+        bool Same(InputRef? a, InputRef b) =>
+            a is not null && a.Kind == b.Kind && a.Index == b.Index &&
+            (a.DeviceId == b.DeviceId || string.Equals(resolve(a.DeviceId), resolve(b.DeviceId), StringComparison.Ordinal));
+
+        var result = new List<(Binding, string[])>();
+        foreach (var b in profile.Bindings)
+        {
+            var parts = control.Links
+                .Where(l => Same(b.Input, l.Input) || b.ExtraInputs.Any(x => Same(x, l.Input)))
+                .Select(l => l.Part).Distinct().ToArray();
+            if (parts.Length > 0) result.Add((b, parts));
+        }
+        return result;
+    }
+
+    /// <summary>Groups the control's linked parts by input (an analog stick's Up and Down are one axis).</summary>
+    public static List<(InputRef Input, string[] Parts)> InputsOf(PanelControl control) =>
+        control.Parts.Select(p => control.Link(p)).Where(l => l is not null)
+            .GroupBy(l => l!.Input).Select(g => (g.Key, g.Select(l => l!.Part).ToArray())).ToList();
+
+    /// <summary>A short caption for the control: the outputs of the enabled bindings, e.g. "A", "Z · X", "LeftX · LeftY".</summary>
+    public static string Caption(IEnumerable<(Binding Binding, string[] Parts)> bindings, int max = 2)
+    {
+        var names = bindings.Where(x => x.Binding.Enabled && x.Binding.Output is not null)
+            .Select(x => OutputNames.Short(x.Binding.Output!)).Distinct().ToList();
+        if (names.Count <= max) return string.Join(" · ", names);
+        return string.Join(" · ", names.Take(max)) + $" +{names.Count - max}";
+    }
+}

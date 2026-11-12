@@ -94,6 +94,49 @@ public class PanelLayoutTests
     }
 
     [Fact]
+    public void Finds_the_bindings_that_read_a_control()
+    {
+        var y = new InputRef("dinput:stick", InputKind.Axis, 1);
+        var x = new InputRef("dinput:stick", InputKind.Axis, 0);
+        var stick = new PanelControl
+        {
+            Id = "P1_STICK", Kind = PanelControlKind.Joystick,
+            Links =
+            {
+                new PanelLink { Part = "Up", Input = y, Sign = -1 }, new PanelLink { Part = "Down", Input = y, Sign = 1 },
+                new PanelLink { Part = "Left", Input = x, Sign = -1 }, new PanelLink { Part = "Right", Input = x, Sign = 1 },
+            },
+        };
+        var profile = new Profile();
+        profile.Bindings.Add(new Binding { Name = "other", Input = new InputRef("keyboard", InputKind.Button, 0x41), Output = OutputRef.Key(0x41) });
+        // Bound through the slot the stick fills: still found.
+        profile.Bindings.Add(new Binding { Name = "y", Input = new InputRef("slot:P1", InputKind.Axis, 1), Output = OutputRef.Xbox(XboxAxis.LeftY) });
+
+        string Resolve(string id) => id == "slot:P1" ? "dinput:stick" : id;
+        var found = PanelMapping.BindingsFor(stick, profile, Resolve);
+        Assert.Single(found);
+        Assert.Equal("y", found[0].Binding.Name);
+        Assert.Equal(new[] { "Up", "Down" }, found[0].Parts);
+        Assert.Equal("LeftY", PanelMapping.Caption(found));
+
+        // Left/Right have no binding yet: one input to add a binding for, covering both directions.
+        var inputs = PanelMapping.InputsOf(stick);
+        Assert.Equal(2, inputs.Count);
+        Assert.Equal(new[] { "Left", "Right" }, inputs[1].Parts);
+    }
+
+    [Fact]
+    public void Caption_lists_outputs_shortly()
+    {
+        (Binding, string[]) M(OutputRef o, bool on = true) => (new Binding { Output = o, Enabled = on }, new[] { "Press" });
+        Assert.Equal("A", PanelMapping.Caption(new[] { M(OutputRef.Xbox(XboxButton.A)) }));
+        Assert.Equal("Mouse Left", PanelMapping.Caption(new[] { M(OutputRef.Mouse(MouseButton.Left)) }));
+        Assert.Equal("Button 3", PanelMapping.Caption(new[] { M(OutputRef.VJoyButton(1, 3)) }));
+        Assert.Equal("", PanelMapping.Caption(new[] { M(OutputRef.Xbox(XboxButton.A), on: false) }));
+        Assert.Equal("A · B +1", PanelMapping.Caption(new[] { M(OutputRef.Xbox(XboxButton.A)), M(OutputRef.Xbox(XboxButton.B)), M(OutputRef.Xbox(XboxButton.X)) }));
+    }
+
+    [Fact]
     public void Saves_and_loads_next_to_the_profiles_folder()
     {
         var dir = Path.Combine(Path.GetTempPath(), "ucrnext-panel-" + Guid.NewGuid().ToString("N"));

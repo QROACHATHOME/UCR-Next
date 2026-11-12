@@ -38,6 +38,9 @@ public sealed class PanelWindow : Window
         public required Grid Root;
         public required Ellipse Body;
         public required Ellipse Ring;
+        public required Border Caption;
+        public required TextBlock CaptionText;
+        public required TextBlock IdText;
         public long ActiveUntil;
     }
 
@@ -58,6 +61,10 @@ public sealed class PanelWindow : Window
     private Point _dragStart;
     private (double X, double Y) _dragOrigin;
     private bool _dragging, _dragMoved;
+    private readonly ComboBox _profileBox = new() { MinWidth = 220, DisplayMemberPath = "Name", VerticalAlignment = VerticalAlignment.Center };
+    private ProfileVm? _profile;
+    private bool _captionsPending;
+    private Binding? _openAfterBuild;
 
     public PanelWindow(MainViewModel vm)
     {
@@ -81,6 +88,17 @@ public sealed class PanelWindow : Window
             bar.Children.Add(b);
             return b;
         }
+        var profileRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 12, 4) };
+        profileRow.Children.Add(new TextBlock { Text = "Profile", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
+        profileRow.Children.Add(_profileBox);
+        profileRow.ToolTip = "The profile shown on the panel: each control is labelled with what it outputs in this profile";
+        bar.Children.Add(profileRow);
+        _profileBox.ItemsSource = vm.Profiles;
+        _profileBox.SelectionChanged += (_, _) =>
+        {
+            if (_profileBox.SelectedItem is ProfileVm p && !ReferenceEquals(p, _vm.Selected)) _vm.Selected = p;
+            Watch(_profileBox.SelectedItem as ProfileVm);
+        };
         Tool("Import from LED-Next…", "Read the layout (positions, names, photo) from LED-Next's cabinet.json. Links you made here are kept for controls with the same id.", ImportLedNext);
         Tool("Add", "Add a control", () => Add(null));
         Tool("Duplicate", "Ctrl+D", Duplicate);
@@ -121,7 +139,8 @@ public sealed class PanelWindow : Window
         var hint = new TextBlock
         {
             TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0),
-            Text = "Drag controls to move them, or use the arrow keys (Shift = 10×). Tab selects the next control. Ctrl+C / Ctrl+V copy, Ctrl+Z / Ctrl+Y undo. " +
+            Text = "Each control is labelled with what it outputs in the profile picked above. Select a control to change or add its binding; double-click opens the binding's settings (Ctrl+S saves). " +
+                   "Drag controls to move them, or use the arrow keys (Shift = 10×); Tab selects the next control, Esc none. Ctrl+C / Ctrl+V copy, Ctrl+Z / Ctrl+Y undo the layout. " +
                    "A dashed orange ring means the control isn't linked to an input yet. Controls light up white while you press them.",
         };
         hint.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
@@ -143,10 +162,13 @@ public sealed class PanelWindow : Window
 
         PreviewKeyDown += OnKey;
         _live = new DispatcherTimer(TimeSpan.FromMilliseconds(30), DispatcherPriority.Background, (_, _) => LiveTick(), Dispatcher);
-        Closed += (_, _) => _live.Stop();
+        _vm.PropertyChanged += OnMainChanged;
+        Activated += (_, _) => RefreshCaptions();
+        Closed += (_, _) => { _live.Stop(); _vm.PropertyChanged -= OnMainChanged; Watch(null); };
 
         Rebuild();
-        Select(null);
+        _profileBox.SelectedItem = _vm.Selected; // also builds the properties
+        if (_profile is null) Select(null);
         _live.Start();
     }
 
@@ -168,6 +190,7 @@ public sealed class PanelWindow : Window
         _empty.Visibility = _layout.Controls.Count == 0 && _photo.Source is null ? Visibility.Visible : Visibility.Collapsed;
         if (_selected is not null && !_layout.Controls.Contains(_selected)) _selected = null;
         foreach (var v in _visuals.Values) Paint(v);
+        RefreshCaptions();
     }
 
     private ImageSource? LoadPhoto()
@@ -189,6 +212,7 @@ public sealed class PanelWindow : Window
 
     private Visual MakeVisual(PanelControl c)
     {
+        double size = DrawnSize(c);
         var body = new Ellipse { StrokeThickness = 2 };
         var ring = new Ellipse { StrokeThickness = 3, Margin = new Thickness(-5), IsHitTestVisible = false };
         string glyph = c.Kind switch
@@ -200,7 +224,7 @@ public sealed class PanelWindow : Window
         };
         var label = new TextBlock
         {
-            Text = c.Label.Length > 0 ? c.Label : glyph.Length > 0 ? glyph : c.Kind.ToString().ToUpperInvariant(),
+            Text = c.Kind == PanelControlKind.Coin ? "" : c.Label.Length > 0 ? c.Label : glyph.Length > 0 ? glyph : c.Kind.ToString().ToUpperInvariant(),
             Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = Math.Max(11, c.Size * 0.3),
             HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false,
         };
@@ -210,19 +234,33 @@ public sealed class PanelWindow : Window
             Margin = new Thickness(-40, 0, -40, -16), TextAlignment = TextAlignment.Center, IsHitTestVisible = false,
         };
         id.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
-        var grid = new Grid { Width = c.Size, Height = c.Size, Cursor = Cursors.Hand, ToolTip = c.Id };
+        // What the control outputs in the shown profile, under it in place of the id.
+        var captionText = new TextBlock { Foreground = Brushes.White, FontSize = 20, FontWeight = FontWeights.SemiBold };
+        var caption = new Border
+        {
+            Child = captionText, Background = CaptionBrush, CornerRadius = new CornerRadius(4), Padding = new Thickness(7, 1, 7, 2),
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(-120, 0, -120, -22), Visibility = Visibility.Collapsed,
+        };
+        var grid = new Grid { Width = size, Height = size, Cursor = Cursors.Hand, ToolTip = c.Id };
         grid.Children.Add(ring);
         grid.Children.Add(body);
         grid.Children.Add(label);
         grid.Children.Add(id);
-        Canvas.SetLeft(grid, c.X - c.Size / 2);
-        Canvas.SetTop(grid, c.Y - c.Size / 2);
-        var v = new Visual { Model = c, Root = grid, Body = body, Ring = ring };
+        grid.Children.Add(caption);
+        Canvas.SetLeft(grid, c.X - size / 2);
+        Canvas.SetTop(grid, c.Y - size / 2);
+        var v = new Visual { Model = c, Root = grid, Body = body, Ring = ring, Caption = caption, CaptionText = captionText, IdText = id };
         _visuals[c] = v;
         grid.MouseLeftButtonDown += (_, e) => OnDragStart(c, e);
         grid.MouseRightButtonUp += (_, e) => { Select(c); e.Handled = true; };
         return v;
     }
+
+    /// <summary>Coin inputs are drawn as small dots, as in LED-Next.</summary>
+    private static double DrawnSize(PanelControl c) => c.Kind == PanelControlKind.Coin ? 16 : c.Size;
+
+    private static readonly Brush CaptionBrush = new SolidColorBrush(Color.FromArgb(0xD8, 0x10, 0x10, 0x14));
 
     private void Paint(Visual v)
     {
@@ -268,7 +306,7 @@ public sealed class PanelWindow : Window
         var c = _selected;
         if (c is null)
         {
-            var t = new TextBlock { Text = "Click a control to edit it and link it to the input it produces.", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 12, 0, 0) };
+            var t = new TextBlock { Text = "Click a control to edit it, link it to the input it produces, and see or change what it does in the profile picked above.", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 12, 0, 0) };
             t.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
             _props.Children.Add(t);
             return;
@@ -348,12 +386,155 @@ public sealed class PanelWindow : Window
             row.Children.Add(text);
             _props.Children.Add(row);
         }
+
+        BuildProfileSection(c);
     }
 
     private static string Describe(PanelLink l)
     {
         string dir = l.Input.Kind == InputKind.Axis && l.Sign != 0 ? (l.Sign > 0 ? " +" : " −") : "";
         return l.Input + dir;
+    }
+
+    // ------------------------------------------------------------------ the profile's bindings
+
+    private void OnMainChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(MainViewModel.Selected) && !ReferenceEquals(_profileBox.SelectedItem, _vm.Selected))
+            _profileBox.SelectedItem = _vm.Selected;
+    }
+
+    /// <summary>Follows the bindings of <paramref name="p"/>, so labels change as you edit them (here or in the main window).</summary>
+    private void Watch(ProfileVm? p)
+    {
+        if (ReferenceEquals(p, _profile)) return;
+        if (_profile is not null) _profile.PropertyChanged -= OnProfileChanged;
+        _profile = p;
+        if (p is not null) p.PropertyChanged += OnProfileChanged;
+        RefreshCaptions();
+        BuildProperties();
+    }
+
+    private void OnProfileChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is not (nameof(ProfileVm.Outputs) or nameof(ProfileVm.Name)) || _captionsPending) return;
+        _captionsPending = true;
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, () => { _captionsPending = false; RefreshCaptions(); });
+    }
+
+    private List<(Binding Binding, string[] Parts)> Mapped(PanelControl c) =>
+        _profile is null ? new() : PanelMapping.BindingsFor(c, _profile.Model, ProfileVm.SlotDevice);
+
+    private void RefreshCaptions()
+    {
+        foreach (var v in _visuals.Values)
+        {
+            var mapped = Mapped(v.Model);
+            var text = PanelMapping.Caption(mapped);
+            v.CaptionText.Text = text;
+            v.Caption.Visibility = text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+            v.IdText.Visibility = text.Length > 0 ? Visibility.Collapsed : Visibility.Visible; // the id stays in the tooltip
+            Panel.SetZIndex(v.Root, text.Length > 0 ? 1 : 0);
+            v.Caption.ToolTip = string.Join("\n", mapped.Where(m => m.Binding.Output is not null).Select(m =>
+                (v.Model.Parts.Length > 1 ? string.Join("/", m.Parts) + " → " : "") + OutputNames.Describe(m.Binding.Output!) +
+                (m.Binding.Enabled ? "" : " (off)") + $"   [{m.Binding.Name}]"));
+        }
+    }
+
+    /// <summary>The selected control's bindings in the shown profile: pick the output, open the settings, or add one.</summary>
+    private void BuildProfileSection(PanelControl c)
+    {
+        if (_profile is not { } p) return;
+        var head = new TextBlock { Text = $"In “{p.Name}”", FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 16, 0, 4), TextTrimming = TextTrimming.CharacterEllipsis };
+        _props.Children.Add(head);
+        if (c.Links.Count == 0)
+        {
+            _props.Children.Add(Faint("Link the control first, then its bindings show here."));
+            return;
+        }
+
+        var mapped = Mapped(c);
+        ComboBox? toOpen = null;
+        foreach (var (b, parts) in mapped)
+        {
+            if (p.Bindings.FirstOrDefault(x => ReferenceEquals(x.Model, b)) is not { } bvm) continue;
+            var title = (c.Parts.Length > 1 ? string.Join("/", parts) + " · " : "") + b.Name + (b.Enabled ? "" : " (off)");
+            var name = new TextBlock { Text = title, FontSize = 12, Margin = new Thickness(0, 6, 0, 2), TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = $"Mode: {b.Mode}" };
+            name.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
+            _props.Children.Add(name);
+
+            var row = new DockPanel();
+            var settings = new Button { Content = "Settings…", Margin = new Thickness(6, 0, 0, 0), ToolTip = "Mode, deadzone, toggle, states…" };
+            settings.Click += (_, _) => { new SettingsDialog(bvm) { Owner = this }.ShowDialog(); BuildProperties(); RefreshCaptions(); };
+            DockPanel.SetDock(settings, Dock.Right);
+            row.Children.Add(settings);
+            var output = new ComboBox { ItemsSource = bvm.Outputs, SelectedItem = bvm.SelectedOutput, ToolTip = "What this control does in the profile" };
+            output.SelectionChanged += (_, _) =>
+            {
+                if (output.SelectedItem is OutputOption o && !ReferenceEquals(o, bvm.SelectedOutput)) bvm.SelectedOutput = o;
+            };
+            row.Children.Add(output);
+            _props.Children.Add(row);
+            if (ReferenceEquals(b, _openAfterBuild)) toOpen = output;
+        }
+
+        // Inputs of this control no binding reads yet.
+        var covered = mapped.SelectMany(m => m.Parts).ToHashSet();
+        foreach (var (input, parts) in PanelMapping.InputsOf(c).Where(x => !x.Parts.All(covered.Contains)))
+        {
+            var add = new Button
+            {
+                Content = "Add binding" + (c.Parts.Length > 1 ? " for " + string.Join("/", parts) : ""),
+                Margin = new Thickness(0, 8, 0, 0), HorizontalAlignment = HorizontalAlignment.Left,
+            };
+            add.Click += (_, _) => AddBinding(c, input, parts);
+            _props.Children.Add(add);
+        }
+        if (mapped.Count == 0)
+            _props.Children.Add(Faint("This control does nothing in this profile yet."));
+
+        var save = new Button { Content = "Save profiles", Command = _vm.SaveCommand, Margin = new Thickness(0, 12, 0, 0), HorizontalAlignment = HorizontalAlignment.Left, ToolTip = "Ctrl+S — the same as Save in the main window" };
+        _props.Children.Add(save);
+
+        _openAfterBuild = null;
+        if (toOpen is not null)
+            Dispatcher.BeginInvoke(DispatcherPriority.Input, () => { toOpen.Focus(); toOpen.IsDropDownOpen = true; });
+    }
+
+    private static TextBlock Faint(string text)
+    {
+        var t = new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, FontSize = 12, Margin = new Thickness(0, 6, 0, 0) };
+        t.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
+        return t;
+    }
+
+    /// <summary>Adds a binding that reads this control to the shown profile and opens its output list.</summary>
+    private void AddBinding(PanelControl c, InputRef input, string[] parts)
+    {
+        if (_profile is not { } p) return;
+        var bvm = p.AddBinding();
+        bvm.SetInput(new InputRef(input.DeviceId, input.Kind, input.Index, input.Label));
+        bvm.Name = c.Id + (c.Parts.Length > 1 ? " " + string.Join("/", parts) : "") + (c.Label.Length > 0 ? $" ({c.Label})" : "");
+        _openAfterBuild = bvm.Model;
+        _status.Text = $"Added a binding for {c.Id} to “{p.Name}”. Pick what it outputs.";
+        Select(c);
+        RefreshCaptions();
+    }
+
+    /// <summary>Double-click: the settings of the control's binding, or a new binding if it has none.</summary>
+    private void OpenBinding(PanelControl c)
+    {
+        Select(c);
+        if (_profile is not { } p || c.Links.Count == 0) return;
+        var mapped = Mapped(c);
+        if (mapped.Count > 0 && p.Bindings.FirstOrDefault(x => ReferenceEquals(x.Model, mapped[0].Binding)) is { } bvm)
+        {
+            new SettingsDialog(bvm) { Owner = this }.ShowDialog();
+            BuildProperties();
+            RefreshCaptions();
+        }
+        else if (PanelMapping.InputsOf(c) is { Count: > 0 } inputs)
+            AddBinding(c, inputs[0].Input, inputs[0].Parts);
     }
 
     // ------------------------------------------------------------------ editing
@@ -414,7 +595,7 @@ public sealed class PanelWindow : Window
     private void Nudge(double dx, double dy)
     {
         if (_selected is not { } s) return;
-        Edit(() => { s.X = Math.Clamp(s.X + dx, 0, _layout.Width); s.Y = Math.Clamp(s.Y + dy, 0, _layout.Height); });
+        Edit(() => { s.X = Math.Clamp(Math.Round(s.X + dx), 0, _layout.Width); s.Y = Math.Clamp(Math.Round(s.Y + dy), 0, _layout.Height); });
     }
 
     private void OnKey(object sender, KeyEventArgs e)
@@ -429,6 +610,10 @@ public sealed class PanelWindow : Window
             case Key.Up: Nudge(0, -step); break;
             case Key.Down: Nudge(0, step); break;
             case Key.Delete: Delete(); break;
+            case Key.Escape when _selected is not null: Select(null); break;
+            case Key.S when ctrl:
+                if (_vm.SaveCommand.CanExecute(null)) { _vm.SaveCommand.Execute(null); _status.Text = "Profiles saved."; }
+                break;
             case Key.Tab when _layout.Controls.Count > 0:
             {
                 // Tab / Shift+Tab: next / previous control.
@@ -460,6 +645,7 @@ public sealed class PanelWindow : Window
 
     private void OnDragStart(PanelControl c, MouseButtonEventArgs e)
     {
+        if (e.ClickCount == 2) { e.Handled = true; OpenBinding(c); return; }
         Select(c);
         _dragging = true;
         _dragMoved = false;
@@ -480,8 +666,8 @@ public sealed class PanelWindow : Window
         c.Y = Math.Clamp(Math.Round(_dragOrigin.Y + dy), 0, _layout.Height);
         if (_visuals.TryGetValue(c, out var v))
         {
-            Canvas.SetLeft(v.Root, c.X - c.Size / 2);
-            Canvas.SetTop(v.Root, c.Y - c.Size / 2);
+            Canvas.SetLeft(v.Root, c.X - DrawnSize(c) / 2);
+            Canvas.SetTop(v.Root, c.Y - DrawnSize(c) / 2);
         }
     }
 
