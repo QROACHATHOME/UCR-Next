@@ -5,6 +5,8 @@ obj/
 *.suo
 TestResults/
 publish/
+out/
+dist/
 
 # Visual Studio solution-upgrade leftovers
 Backup/

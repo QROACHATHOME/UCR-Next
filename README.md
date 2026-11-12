@@ -7,9 +7,18 @@ It can run silently in the background, start with Windows, and be controlled fro
 
 Status: **0.5**. Windows 10/11 only.
 
-**Download:** grab `UCR-Next-<version>-win-x64.zip` from the
-[Releases](https://github.com/QROACHATHOME/UCR-Next/releases) page, unzip anywhere and run
-`UCR-Next.exe` — no .NET install needed. Then install the drivers you need (see Requirements).
+**Download** from the [Releases](https://github.com/QROACHATHOME/UCR-Next/releases) page, then install
+the drivers you need (see Requirements):
+
+- **`UCR-Next-<version>-setup.exe`** (recommended): installs into `C:\Program Files\UCR-Next` with a
+  Start-menu shortcut and an uninstaller. The program folder holds only about 25 files; if the
+  Microsoft .NET 8 Desktop Runtime isn't installed yet, Setup installs it (it's bundled, no internet
+  needed). Optional: desktop shortcut, start with Windows. Running Setup again upgrades in place and
+  closes a running UCR-Next first. Uninstalling also removes the start-with-Windows entry; your
+  profiles and settings in `%APPDATA%\UCR-Next` are kept.
+- **`UCR-Next-<version>-win-x64.zip`** (portable): unzip anywhere and run `UCR-Next.exe` — no .NET
+  install needed, because the runtime is in the folder (a few hundred files). Use this to
+  [install in place of UCR](#replacing-ucrexe-frontends-keep-working) or on a PC where you can't run installers.
 
 ## Features
 
@@ -146,8 +155,20 @@ git tag v0.5.0
 git push origin v0.5.0
 ```
 
-GitHub Actions (`.github/workflows/release.yml`) runs the tests, builds the self-contained app and
-publishes it as `UCR-Next-0.5.0-win-x64.zip` on a new release with notes generated from the commits.
+GitHub Actions (`.github/workflows/release.yml`) runs the tests, then `build\Build-Release.ps1`, and
+publishes `UCR-Next-0.5.0-setup.exe` and `UCR-Next-0.5.0-win-x64.zip` on a new release with notes
+generated from the commits.
+
+The same script builds both downloads locally into `dist\`:
+
+```powershell
+winget install JRSoftware.InnoSetup      # once; the installer is an Inno Setup script (build\UCR-Next.iss)
+.\build\Build-Release.ps1                # version from Directory.Build.props
+.\build\Build-Release.ps1 -SkipInstaller # zip only
+```
+
+It downloads Microsoft's .NET 8 Desktop Runtime installer once (cached for 30 days in
+`%LOCALAPPDATA%\UCR-Next-build`, signature-checked) and bundles it into Setup.
 
 ### Startup options (`UCR-Next.exe`)
 
@@ -298,7 +319,8 @@ Closing or killing `UCR.exe` stops mapping, and its virtual pads are unplugged.
 
 1. Close UCR.
 2. Rename UCR's folder, e.g. `C:\UCR` → `C:\UCR-original`. Nothing in it is changed or deleted.
-3. Unzip UCR-Next into a new folder with the old name (`C:\UCR`). It contains `UCR.exe`.
+3. Unzip UCR-Next (the portable zip) into a new folder with the old name (`C:\UCR`). It contains `UCR.exe`.
+   (Setup also works: choose `C:\UCR` as the install folder. An installed UCR-Next has `UCR.exe` too.)
 4. Copy `context.xml` from `C:\UCR-original` into `C:\UCR`. The first time a profile is asked for
    that UCR-Next doesn't have, it imports this file once and tries again. You can also import it
    yourself (*File → Import UCR profiles…*), for example to choose per-device keyboards.

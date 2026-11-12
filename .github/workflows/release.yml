@@ -1,7 +1,8 @@
 # Builds and publishes a release when a version tag is pushed:
 #   git tag v0.5.0
 #   git push origin v0.5.0
-# The release gets a self-contained Windows build (no .NET install needed) as a zip,
+# The release gets an installer (UCR-Next-x.y.z-setup.exe) and a portable, self-contained zip
+# (no .NET install needed), both built by build/Build-Release.ps1,
 # and release notes generated from the commits since the previous tag.
 name: Release
 
@@ -25,15 +26,18 @@ jobs:
       - name: Test
         run: dotnet test -c Release
 
-      - name: Publish
+      - name: Install Inno Setup
         shell: pwsh
         run: |
-          $version = '${{ github.ref_name }}'.TrimStart('v')
-          dotnet publish src/UcrNext.App -c Release -r win-x64 --self-contained true -p:Version=$version -o out/UCR-Next
-          Copy-Item README.md, LICENSE out/UCR-Next/
-          Compress-Archive -Path out/UCR-Next/* -DestinationPath "UCR-Next-$version-win-x64.zip"
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+
+      - name: Build installer and portable zip
+        shell: pwsh
+        run: ./build/Build-Release.ps1 -Version '${{ github.ref_name }}'
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: UCR-Next-*-win-x64.zip
+          files: |
+            dist/UCR-Next-*-setup.exe
+            dist/UCR-Next-*-win-x64.zip
           generate_release_notes: true
