@@ -5,7 +5,53 @@ It remaps any input (gamepad, joystick, wheel, keyboard, mouse) to any output (k
 a **virtual Xbox 360 controller** or **vJoy** joysticks), organised in profiles that are saved as JSON.
 It can run silently in the background, start with Windows, and be controlled from the command line.
 
-Status: **0.5**. Windows 10/11 only.
+Windows 10/11 only.
+
+> **Still in development** (version 0.13). UCR-Next runs in place of UCR on a 4-player arcade
+> cabinet (installed as `UCR.exe`). It is not finished, though: expect rough edges and changes
+> between versions, and keep your original UCR folder until you're happy.
+
+## Screenshots
+**Profiles and bindings:** every profile with its bindings, outputs and options, plus the detected devices.
+![UCR-Next main window: profiles, bindings and detected devices](docs/screenshots/main.png)
+
+**Arcade panel:** your control panel as it really looks (imported from LED-Next), with every control linked
+to the input it sends.
+![UCR-Next arcade panel view: a 4-player panel, 41 controls linked](docs/screenshots/arcade-panel.png)
+
+## What UCR-Next improves on UCR
+- **Actively maintained**, on .NET 8 and with automated tests. It has a Setup installer that bundles the .NET
+  runtime, and a portable zip.
+- **A drop-in replacement.** It ships a `UCR.exe` that understands `UCR.exe --profile "Parent,Child"`, so
+  frontends and launch scripts keep working unchanged. It imports UCR's `context.xml` with all the standard
+  and HidWizards plugins. Re-importing keeps what you've added since, and an import report lists anything
+  that was approximated.
+- **Several profiles at once.** UCR ran one profile at a time. Profiles can also switch on by themselves:
+  - only while a given program is in front;
+  - never while a given device is plugged in (e.g. your real wheel);
+  - not until all of their controllers are connected.
+- **Identical devices keep their identity.** Two identical spinners or sticks are told apart by USB serial
+  number or USB port, not by the order Windows lists them in, so they no longer swap after a reboot.
+- **Device slots and extra players.** Bindings read a named slot ("P1 stick") instead of one exact controller.
+  Replace a stick and you change one setting, not every binding. Extra players replace UCR's shadow devices.
+- **Per-device keyboards and mice without a driver** through Raw Input, including mouse, trackball and spinner
+  movement. Interception is still supported when you need to block one device.
+- **Safer states (shift layers).** A binding switched off by a state releases its output instead of freezing it.
+  **Ctrl+Alt+Pause** always stops mapping, and keys are never left stuck.
+- **No ghost controllers.** Virtual Xbox 360 and DualShock 4 pads are plugged in only while a profile uses them,
+  in player order, and are unplugged when they're no longer needed, even if UCR-Next crashes.
+- **Edit with confidence.** Changes apply at once so you can try them, but are saved only when you press
+  **Save**. You get **Revert** and **Undo/Redo**. Profiles can be copied and pasted as text, duplicated and
+  exported, and bindings can be sorted into named, coloured groups.
+- **Know your devices.** Each device shows the product name it reports. A device lights up when you press
+  something on it, and you can give it your own name, notes and picture.
+- **Arcade panel view.** Import your panel from LED-Next, link each control by pressing it, watch controls light
+  up live, and see or edit what each control does in any profile.
+- **Built for cabinets and launchers:**
+  - a `ucrnext.exe` command line (`status`, `solo`, `game "<name>"`, `start`, `stop`…) and a games list per profile;
+  - background mode with a tray icon;
+  - start with Windows, optionally as administrator.
+- **Light and dark themes** that follow Windows.
 
 **Download** from the [Releases](https://github.com/QROACHATHOME/UCR-Next/releases) page, then install
 the drivers you need (see Requirements):
