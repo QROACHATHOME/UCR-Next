@@ -180,7 +180,7 @@ device re-plugs without a reboot it can stop seeing new devices — reboot to fi
 ## Build and run
 
 ```powershell
-cd "D:\My AI projects\UCR-Next"
+cd UCR-Next        # wherever you cloned the repository
 dotnet build
 dotnet test
 dotnet run --project src\UcrNext.App
