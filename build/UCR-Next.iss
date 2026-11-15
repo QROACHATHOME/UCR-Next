@@ -39,6 +39,7 @@ OutputBaseFilename={#AppName}-{#AppVersion}-setup
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
 LicenseFile={#Root}\LICENSE
+SetupIconFile={#Root}\src\UcrNext.App\Assets\UCR-Next.ico
 
 [Tasks]
 Name: desktopicon; Description: "Create a &desktop shortcut"; Flags: unchecked

@@ -25,6 +25,10 @@ public partial class BindDialog : Window
     private readonly bool _interception;
 
     public InputRef? Captured { get; private set; }
+    /// <summary>Which way the captured control moved: +1 or -1 (buttons and keys: +1).</summary>
+    public int CapturedDirection { get; private set; } = 1;
+    /// <summary>The Skip button was used (only shown with <see cref="ShowSkip"/>).</summary>
+    public bool Skipped { get; private set; }
 
     private readonly Func<string>? _hookDiag;
 
@@ -63,6 +67,7 @@ public partial class BindDialog : Window
                 bool perDevice = input.DeviceId.StartsWith(RawInputProvider.MousePrefix);
                 if (perDevice == anyDevice) continue;
                 Captured = input;
+                CapturedDirection = value < 0 ? -1 : 1;
                 DialogResult = true;
                 return;
             }
@@ -92,6 +97,7 @@ public partial class BindDialog : Window
             if (!anyDevice && _interception && ((rawKb) || (rawMouse && !wheel))) continue;
 
             Captured = input;
+            CapturedDirection = input.Kind == InputKind.Button || value >= before ? 1 : -1;
             Log($"captured {input.DeviceId} {input.Kind} {input.Index} ({input.Label})");
             DialogResult = true;
             return;
@@ -129,6 +135,20 @@ public partial class BindDialog : Window
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e) => DialogResult = false;
+
+    private void Skip_Click(object sender, RoutedEventArgs e) { Skipped = true; DialogResult = false; }
+
+    /// <summary>Shows a Skip button next to Cancel (the profile wizard: skip this control, keep going).</summary>
+    public bool ShowSkip
+    {
+        get => SkipButton.Visibility == Visibility.Visible;
+        set
+        {
+            SkipButton.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
+            if (value) HintText.Text = "Don't have this control? Skip goes to the next one. Esc or Cancel stops. " +
+                                       "The left mouse button is ignored here so you can click the buttons.";
+        }
+    }
 
     /// <summary>Replaces the "press a button…" text (e.g. "Press P1_B1 on the panel").</summary>
     public string Prompt { get => PromptText.Text; set => PromptText.Text = value; }

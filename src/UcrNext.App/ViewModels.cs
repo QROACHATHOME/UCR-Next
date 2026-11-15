@@ -587,6 +587,42 @@ public sealed class ProfileVm : Observable
         _ => $"{Model.Games.Count} games",
     };
 
+    /// <summary>Racing, Light gun… (free text; suggestions in <see cref="GameTypes.Suggested"/>).</summary>
+    public string GameType
+    {
+        get => Model.GameType;
+        set
+        {
+            var v = GameTypes.Normalize(value);
+            if (Model.GameType == v) return;
+            Model.GameType = v;
+            Raise(); Raise(nameof(GameTypeGroup)); Raise(nameof(HasGameType));
+            _changed(this);
+        }
+    }
+
+    public bool HasGameType => Model.GameType.Trim().Length > 0;
+
+    /// <summary>Heading this profile is listed under when the list is grouped by game type.</summary>
+    public string GameTypeGroup => GameTypes.GroupOf(Model);
+
+    /// <summary>Sound file played when the profile becomes active (empty = none).</summary>
+    public string ActivationSound
+    {
+        get => Model.ActivationSound;
+        set
+        {
+            var v = (value ?? "").Trim().Trim('"');
+            if (Model.ActivationSound == v) return;
+            Model.ActivationSound = v;
+            Raise(); Raise(nameof(HasSound)); Raise(nameof(SoundName));
+            _changed(this);
+        }
+    }
+
+    public bool HasSound => Model.ActivationSound.Length > 0;
+    public string SoundName => HasSound ? System.IO.Path.GetFileName(Model.ActivationSound) : "(none)";
+
     public void AddSkipDevice(DeviceInfo d)
     {
         if (Model.SkipIfDevicesPresent.Any(m => m.Matches(d))) return;
@@ -689,6 +725,7 @@ public sealed class MainViewModel : Observable
     private bool _hasUnsaved;
     private Autostart.Mode _autostart;
     private readonly DispatcherTimer _activityTimer;
+    private readonly DispatcherTimer _soundTimer;
     private readonly Dictionary<InputRef, double> _lastValues = new();
 
     public MainViewModel(AppServices services)
@@ -721,6 +758,9 @@ public sealed class MainViewModel : Observable
         // Lights up a device in the list when it is used, to tell identical devices apart.
         _activityTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(80), DispatcherPriority.Background, (_, _) => CheckActivity(), Dispatcher.CurrentDispatcher);
         _activityTimer.Start();
+        _soundTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(150), DispatcherPriority.Background, (_, _) => CheckActivations(), Dispatcher.CurrentDispatcher);
+        _soundTimer.Start();
+        _player.MediaFailed += (_, e) => Status = "Could not play the sound: " + e.ErrorException.Message;
         _autostart = _s.AutostartMode;
         Refresh();
 
@@ -952,6 +992,74 @@ public sealed class MainViewModel : Observable
     {
         get => _s.Settings.CloseToTray;
         set { _s.Settings.CloseToTray = value; _s.SaveSettings(); Raise(); }
+    }
+
+    public bool MinimizeToTray
+    {
+        get => _s.Settings.MinimizeToTray;
+        set { _s.Settings.MinimizeToTray = value; _s.SaveSettings(); Raise(); }
+    }
+
+    public bool GroupProfilesByType
+    {
+        get => _s.Settings.GroupProfilesByType;
+        set { _s.Settings.GroupProfilesByType = value; _s.SaveSettings(); Raise(); }
+    }
+
+    public bool PlayActivationSounds
+    {
+        get => _s.Settings.PlayActivationSounds;
+        set { _s.Settings.PlayActivationSounds = value; _s.SaveSettings(); Raise(); }
+    }
+
+    /// <summary>Game types to pick from: the suggested ones plus any typed on a profile.</summary>
+    public IReadOnlyList<string> GameTypeChoices => GameTypes.Suggested
+        .Concat(Profiles.Select(p => GameTypes.Normalize(p.GameType)).Where(t => t.Length > 0))
+        .Distinct(StringComparer.CurrentCultureIgnoreCase)
+        .OrderBy(t => t, StringComparer.CurrentCultureIgnoreCase)
+        .ToList();
+
+    public void RaiseGameTypeChoices() => Raise(nameof(GameTypeChoices));
+
+    /// <summary>Adds a profile made by the wizard (unsaved, like any new profile) and selects it.</summary>
+    public ProfileVm AddWizardProfile(Profile p)
+    {
+        ApplyPending();
+        if (Profiles.Any(x => string.Equals(x.Name, p.Name, StringComparison.CurrentCultureIgnoreCase)))
+            p.Name = ProfileCopy.CopyName(p.Name, Profiles.Select(x => x.Name));
+        var vm = InsertProfile(p, Profiles.Count);
+        Status = $"Created \"{p.Name}\" with {p.Bindings.Count} binding(s) — it's active now; Save (Ctrl+S) keeps it";
+        return vm;
+    }
+
+    // ---- Activation sounds ----
+
+    private readonly System.Windows.Media.MediaPlayer _player = new();
+    private HashSet<Guid> _wasActive = new();
+
+    /// <summary>Plays the sound of each profile that just became active (mapping on). Checked every 150 ms.</summary>
+    private void CheckActivations()
+    {
+        var now = IsMapping ? _s.Engine.ActiveProfileIds.ToHashSet() : new HashSet<Guid>();
+        var started = now.Where(id => !_wasActive.Contains(id)).ToList();
+        _wasActive = now;
+        if (started.Count == 0 || !PlayActivationSounds) return;
+        var p = started.Select(id => Profiles.FirstOrDefault(x => x.Model.Id == id)).FirstOrDefault(x => x?.HasSound == true);
+        if (p is not null) PlaySound(p.ActivationSound);
+    }
+
+    /// <summary>Plays a sound file (also the profile settings' test button). Returns an error message or null.</summary>
+    public string? PlaySound(string path)
+    {
+        if (!System.IO.File.Exists(path)) { Status = "Sound file not found: " + path; return Status; }
+        try
+        {
+            _player.Open(new Uri(System.IO.Path.GetFullPath(path)));
+            _player.Volume = 1;
+            _player.Play();
+            return null;
+        }
+        catch (Exception ex) { Status = "Could not play the sound: " + ex.Message; return Status; }
     }
 
     public bool UseInterception

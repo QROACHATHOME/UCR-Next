@@ -19,7 +19,7 @@ public sealed class MappingEngine
     public const double WheelNotchesPerTick = 0.08;
     public const int WheelNotch = 120;
 
-    private sealed record CompiledProfile(string Name, string[] Apps, DeviceMatch[] Skip, Binding[] Bindings, bool RequireDevices)
+    private sealed record CompiledProfile(Guid Id, string Name, string[] Apps, DeviceMatch[] Skip, Binding[] Bindings, bool RequireDevices)
     {
         /// <summary>Named states (UCR filters) of this profile; set by SetState bindings.</summary>
         public Dictionary<string, bool> States { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -66,6 +66,7 @@ public sealed class MappingEngine
     private HashSet<OutputRef> _defaultOutputs = new();
     private readonly Dictionary<Binding, BindingState> _states = new(ReferenceEqualityComparer.Instance);
     private string[] _activeNames = Array.Empty<string>();
+    private Guid[] _activeIds = Array.Empty<Guid>();
     private volatile HashSet<InputRef> _blocked = NoBlocks;
     private HashSet<InputRef> _blockCandidates = NoBlocks;
 
@@ -107,6 +108,9 @@ public sealed class MappingEngine
 
     /// <summary>Names of the profiles currently active (after the per-application filter).</summary>
     public IReadOnlyList<string> ActiveProfileNames { get { lock (_gate) return _activeNames; } }
+
+    /// <summary>Ids of the profiles currently active (same order as <see cref="ActiveProfileNames"/>).</summary>
+    public IReadOnlyList<Guid> ActiveProfileIds { get { lock (_gate) return _activeIds; } }
 
     /// <summary>Profiles that apply to the foreground app but are skipped because a listed device is connected.</summary>
     public IReadOnlyList<string> SkippedProfileNames { get { lock (_gate) return _skippedNames; } }
@@ -162,6 +166,7 @@ public sealed class MappingEngine
         var copy = profiles
             .Where(p => p.Enabled)
             .Select(p => new CompiledProfile(
+                p.Id,
                 p.Name,
                 p.Applications.Where(a => !string.IsNullOrWhiteSpace(a)).Select(Profile.NormalizeExe).ToArray(),
                 p.SkipIfDevicesPresent.Select(m => new DeviceMatch { DeviceId = m.DeviceId, Name = m.Name }).ToArray(),
@@ -718,6 +723,7 @@ public sealed class MappingEngine
         _waitingNames = waiting.Select(i => _profiles[i].Name).ToArray();
         _defaultOutputs = _bindings.Where(b => b.Mode == BindingMode.DefaultValue).Select(b => b.Output!).ToHashSet();
         _activeNames = active.Select(p => p.Name).ToArray();
+        _activeIds = active.Select(p => p.Id).ToArray();
         _skippedNames = skipped.Select(i => _profiles[i].Name).ToArray();
         int Needed(OutputTarget t)
         {

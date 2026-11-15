@@ -13,6 +13,9 @@
     <DockPanel>
         <Menu DockPanel.Dock="Top">
             <MenuItem Header="_File">
+                <MenuItem Header="New profile with the _wizard…" Click="Wizard_Click"
+                          ToolTip="Step by step: name and game type, what your controller should act as, then press each control" />
+                <Separator />
                 <MenuItem Header="_Save" InputGestureText="Ctrl+S" Command="{Binding SaveCommand}" />
                 <MenuItem Header="_Revert to saved" Command="{Binding RevertCommand}" />
                 <MenuItem Header="_Undo" InputGestureText="Ctrl+Z" Command="{Binding UndoCommand}" />
@@ -36,6 +39,8 @@
                 <MenuItem Header="Group bindings by controller" Click="AutoGroup_Click" />
             </MenuItem>
             <MenuItem Header="_View">
+                <MenuItem Header="Group profiles by game type" IsCheckable="True" IsChecked="{Binding GroupProfilesByType}" />
+                <Separator />
                 <MenuItem Header="Arcade panel…" Click="Panel_Click" InputGestureText="F2"
                           ToolTip="Your control panel as it looks: link each control to its input and see it light up when pressed" />
                 <Separator />
@@ -50,6 +55,10 @@
                 <MenuItem Header="Start mapping when UCR-Next starts" IsCheckable="True" IsChecked="{Binding StartMappingOnLaunch}" />
                 <MenuItem Header="Show tray icon" IsCheckable="True" IsChecked="{Binding ShowTrayIcon}" Click="TraySetting_Click" />
                 <MenuItem Header="Keep running in the tray when the window is closed" IsCheckable="True" IsChecked="{Binding CloseToTray}" />
+                <MenuItem Header="Minimize to the tray (not the taskbar)" IsCheckable="True" IsChecked="{Binding MinimizeToTray}"
+                          ToolTip="Minimizing hides the window; double-click the tray icon to bring it back. Needs the tray icon." />
+                <MenuItem Header="Play profile activation sounds" IsCheckable="True" IsChecked="{Binding PlayActivationSounds}"
+                          ToolTip="Each profile can have a sound (Profile settings) that plays when it becomes active" />
                 <Separator />
                 <MenuItem Header="Start with Windows (hidden)">
                     <MenuItem Header="Off" IsCheckable="True" IsChecked="{Binding AutostartOff, Mode=OneWay}" Click="AutostartOff_Click" />
@@ -125,7 +134,8 @@
                 <DockPanel>
                     <DockPanel DockPanel.Dock="Top" Margin="2,0,0,6">
                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                            <ui:Button Style="{StaticResource IconButton}" Icon="{ui:SymbolIcon Add24}" Click="AddProfile_Click" AutomationProperties.Name="New profile" ToolTip="New profile" />
+                            <ui:Button Style="{StaticResource IconButton}" Icon="{ui:SymbolIcon Wand24}" Click="Wizard_Click" AutomationProperties.Name="New profile with the wizard" ToolTip="New profile with the wizard (step by step)" />
+                            <ui:Button Style="{StaticResource IconButton}" Icon="{ui:SymbolIcon Add24}" Click="AddProfile_Click" AutomationProperties.Name="New profile" ToolTip="New empty profile" />
                             <ui:Button Style="{StaticResource IconButton}" Icon="{ui:SymbolIcon DocumentCopy24}" Click="DuplicateProfile_Click" AutomationProperties.Name="Duplicate profile" ToolTip="Duplicate profile (Ctrl+D)" />
                             <ui:Button Style="{StaticResource IconButton}" Icon="{ui:SymbolIcon Copy24}" Click="CopyProfile_Click" AutomationProperties.Name="Copy profile to the clipboard" ToolTip="Copy profile to the clipboard (Ctrl+C)" />
                             <ui:Button Style="{StaticResource IconButton}" Icon="{ui:SymbolIcon ClipboardPaste24}" Click="Paste_Click" AutomationProperties.Name="Paste a profile or bindings" ToolTip="Paste a profile or bindings (Ctrl+V)" />
@@ -133,12 +143,15 @@
                         </StackPanel>
                         <TextBlock Text="Profiles" Style="{StaticResource SectionTitle}" />
                     </DockPanel>
+                    <CheckBox DockPanel.Dock="Top" Margin="4,0,0,6" Content="Group by game type" IsChecked="{Binding GroupProfilesByType}"
+                              ToolTip="Show the profiles under a heading per game type (set it in Profile settings)" />
                     <ui:ListView x:Name="ProfileList" ItemsSource="{Binding Profiles}" SelectedItem="{Binding Selected}"
                              HorizontalContentAlignment="Stretch" KeyDown="ProfileList_KeyDown"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                         <ui:ListView.ContextMenu>
                             <ContextMenu>
-                                <MenuItem Header="New profile" Click="AddProfile_Click" />
+                                <MenuItem Header="New profile with the wizard…" Click="Wizard_Click" />
+                                <MenuItem Header="New empty profile" Click="AddProfile_Click" />
                                 <MenuItem Header="Duplicate" InputGestureText="Ctrl+D" Click="DuplicateProfile_Click" />
                                 <MenuItem Header="Copy" InputGestureText="Ctrl+C" Click="CopyProfile_Click" />
                                 <MenuItem Header="Paste" InputGestureText="Ctrl+V" Click="Paste_Click" />
@@ -149,6 +162,20 @@
                                 <MenuItem Header="Delete" InputGestureText="Del" Click="DeleteProfile_Click" />
                             </ContextMenu>
                         </ui:ListView.ContextMenu>
+                        <ui:ListView.GroupStyle>
+                            <GroupStyle>
+                                <GroupStyle.HeaderTemplate>
+                                    <DataTemplate>
+                                        <DockPanel Margin="4,10,4,2">
+                                            <TextBlock DockPanel.Dock="Right" Text="{Binding ItemCount}" Style="{StaticResource Faint}" VerticalAlignment="Center" />
+                                            <ui:SymbolIcon Symbol="Tag24" FontSize="13" Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" Margin="0,0,6,0" />
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="12"
+                                                       Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" />
+                                        </DockPanel>
+                                    </DataTemplate>
+                                </GroupStyle.HeaderTemplate>
+                            </GroupStyle>
+                        </ui:ListView.GroupStyle>
                         <ui:ListView.ItemTemplate>
                             <DataTemplate DataType="{x:Type local:ProfileVm}">
                                 <DockPanel Margin="0,3">
@@ -158,7 +185,17 @@
                                                VerticalAlignment="Top" Margin="4,2,0,0" ToolTip="Unsaved changes"
                                                Visibility="{Binding IsDirty, Converter={StaticResource BoolToVis}}" />
                                     <StackPanel>
-                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                        <DockPanel>
+                                            <ui:SymbolIcon DockPanel.Dock="Right" Symbol="MusicNote224" FontSize="12" Margin="4,0,0,0"
+                                                           ToolTip="{Binding SoundName, StringFormat='Plays {0} when it becomes active'}"
+                                                           Visibility="{Binding HasSound, Converter={StaticResource BoolToVis}}" />
+                                            <Border DockPanel.Dock="Right" CornerRadius="8" Padding="6,0" Margin="6,0,0,0" VerticalAlignment="Center"
+                                                    Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                                                    Visibility="{Binding HasGameType, Converter={StaticResource BoolToVis}}" ToolTip="Game type">
+                                                <TextBlock Text="{Binding GameType}" FontSize="10.5" />
+                                            </Border>
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                        </DockPanel>
                                         <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
                                             <ItemsControl ItemsSource="{Binding GroupBrushes}" VerticalAlignment="Center">
                                                 <ItemsControl.ItemsPanel>
@@ -233,7 +270,7 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
                     </DockPanel>
-                    <Expander DockPanel.Dock="Top" Header="Profile settings: programs, games, devices" Margin="0,0,0,8" IsExpanded="False">
+                    <Expander DockPanel.Dock="Top" Header="Profile settings: game type, sound, programs, games, devices" Margin="0,0,0,8" IsExpanded="False">
                         <!-- One setting per row: title and explanation on the left, the control on the right.
                              Scrolls inside a limited height so the bindings below stay in view. -->
                         <ScrollViewer MaxHeight="320" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
@@ -244,37 +281,65 @@
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
-                            <!-- Programs -->
+                            <!-- Game type -->
                             <StackPanel Grid.Row="0" Grid.Column="0">
+                                <TextBlock Text="Game type" FontWeight="SemiBold" />
+                                <TextBlock Text="Racing, light gun, fighting… Pick one or type your own. The profile list can be grouped by it." Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                            </StackPanel>
+                            <ComboBox Grid.Row="0" Grid.Column="2" IsEditable="True" HorizontalAlignment="Left" MinWidth="240" VerticalAlignment="Top"
+                                      ItemsSource="{Binding DataContext.GameTypeChoices, RelativeSource={RelativeSource AncestorType=Window}}"
+                                      Text="{Binding GameType, UpdateSourceTrigger=LostFocus}" DropDownOpened="GameTypeBox_DropDownOpened"
+                                      SelectionChanged="GameTypeBox_SelectionChanged" AutomationProperties.Name="Game type" />
+                            <Separator Grid.Row="1" Grid.ColumnSpan="3" Margin="0,14" Opacity="0.5" />
+
+                            <!-- Activation sound -->
+                            <StackPanel Grid.Row="2" Grid.Column="0">
+                                <TextBlock Text="Sound when active" FontWeight="SemiBold" />
+                                <TextBlock Text="Plays when this profile becomes active while mapping is on (e.g. when its game comes to the front)." Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                            </StackPanel>
+                            <StackPanel Grid.Row="2" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Top">
+                                <ui:SymbolIcon Symbol="MusicNote224" FontSize="16" Margin="0,0,6,0" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding SoundName}" ToolTip="{Binding ActivationSound}" VerticalAlignment="Center" MaxWidth="260" TextTrimming="CharacterEllipsis" Margin="0,0,10,0" />
+                                <Button Content="Choose…" Click="ChooseSound_Click" />
+                                <ui:Button Style="{StaticResource IconButton}" Icon="{ui:SymbolIcon Play24}" Click="TestSound_Click" Margin="4,0,0,0"
+                                           AutomationProperties.Name="Play the sound" ToolTip="Play it now" IsEnabled="{Binding HasSound}" />
+                                <ui:Button Style="{StaticResource IconButton}" Icon="{ui:SymbolIcon Dismiss24}" Click="ClearSound_Click"
+                                           AutomationProperties.Name="No sound" ToolTip="No sound" IsEnabled="{Binding HasSound}" />
+                            </StackPanel>
+                            <Separator Grid.Row="3" Grid.ColumnSpan="3" Margin="0,14" Opacity="0.5" />
+
+                            <!-- Programs -->
+                            <StackPanel Grid.Row="4" Grid.Column="0">
                                 <TextBlock Text="Programs" FontWeight="SemiBold" />
                                 <TextBlock Text="Only active while one of these programs is in front. Empty = everywhere." Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,3,0,0" />
                             </StackPanel>
-                            <StackPanel Grid.Row="0" Grid.Column="2">
+                            <StackPanel Grid.Row="4" Grid.Column="2">
                                 <TextBox Text="{Binding ApplicationsText, UpdateSourceTrigger=LostFocus}"
                                          ToolTip="Comma-separated, e.g. game.exe, emulator.exe. Leave empty to use the profile everywhere." />
                                 <Button HorizontalAlignment="Left" Content="Add running program ▾" Click="AddApp_Click" Margin="0,8,0,0" />
                             </StackPanel>
-                            <Separator Grid.Row="1" Grid.ColumnSpan="3" Margin="0,14" Opacity="0.5" />
+                            <Separator Grid.Row="5" Grid.ColumnSpan="3" Margin="0,14" Opacity="0.5" />
 
                             <!-- Games -->
-                            <StackPanel Grid.Row="2" Grid.Column="0">
+                            <StackPanel Grid.Row="6" Grid.Column="0">
                                 <TextBlock Text="Games" FontWeight="SemiBold" />
                                 <TextBlock Text="Games that use this profile, one per line. Launchers can enable it with 'ucrnext game'." Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,3,0,0" />
                             </StackPanel>
-                            <TextBox Grid.Row="2" Grid.Column="2" MinHeight="80" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"
+                            <TextBox Grid.Row="6" Grid.Column="2" MinHeight="80" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"
                                      Text="{Binding GamesText, UpdateSourceTrigger=LostFocus}"
                                      ToolTip="For your reference, and for launchers: 'ucrnext game &quot;Game name&quot;' enables the profile(s) listing that game." />
-                            <Separator Grid.Row="3" Grid.ColumnSpan="3" Margin="0,14" Opacity="0.5" />
+                            <Separator Grid.Row="7" Grid.ColumnSpan="3" Margin="0,14" Opacity="0.5" />
 
                             <!-- Skip while connected -->
-                            <StackPanel Grid.Row="4" Grid.Column="0">
+                            <StackPanel Grid.Row="8" Grid.Column="0">
                                 <TextBlock Text="Skip while connected" FontWeight="SemiBold" />
                                 <TextBlock Text="The profile stays off, and creates no virtual controller, while any of these devices is plugged in (e.g. your real wheel)." Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,3,0,0" />
                             </StackPanel>
-                            <StackPanel Grid.Row="4" Grid.Column="2">
+                            <StackPanel Grid.Row="8" Grid.Column="2">
                                 <ItemsControl ItemsSource="{Binding SkipDevices}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
@@ -288,14 +353,14 @@
                                 </ItemsControl>
                                 <Button HorizontalAlignment="Left" Content="Add connected device ▾" Click="AddSkipDevice_Click" />
                             </StackPanel>
-                            <Separator Grid.Row="5" Grid.ColumnSpan="3" Margin="0,14" Opacity="0.5" />
+                            <Separator Grid.Row="9" Grid.ColumnSpan="3" Margin="0,14" Opacity="0.5" />
 
                             <!-- Wait for controllers -->
-                            <StackPanel Grid.Row="6" Grid.Column="0">
+                            <StackPanel Grid.Row="10" Grid.Column="0">
                                 <TextBlock Text="Wait for controllers" FontWeight="SemiBold" />
                                 <TextBlock Text="Stay off until every controller the bindings read is connected, so no virtual pad is plugged in for a missing controller." Style="{StaticResource Faint}" TextWrapping="Wrap" Margin="0,3,0,0" />
                             </StackPanel>
-                            <CheckBox Grid.Row="6" Grid.Column="2" VerticalAlignment="Top" IsChecked="{Binding RequireDevices}"
+                            <CheckBox Grid.Row="10" Grid.Column="2" VerticalAlignment="Top" IsChecked="{Binding RequireDevices}"
                                       Content="Wait until its controllers are connected"
                                       ToolTip="Real pads then keep their Xbox slots, because a virtual pad never takes a slot ahead of them." />
                         </Grid>

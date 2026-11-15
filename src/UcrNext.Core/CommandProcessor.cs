@@ -34,6 +34,7 @@ public sealed class CommandProcessor
         "  enable <profile>       enable a profile\n" +
         "  disable <profile>      disable a profile\n" +
         "  solo <profile>         enable only this profile, disable all others\n" +
+        "  disable-all            disable every profile (also: none, disable --all)\n" +
         "  ucr <Parent,Child>     like UCR.exe --profile: enable only that profile and start mapping\n" +
         "  games                  list games and the profiles they use\n" +
         "  game <game> [--start]  enable only the profile(s) listed for this game\n" +
@@ -73,6 +74,10 @@ public sealed class CommandProcessor
                 return _host.IsMapping ? "Mapping ON" : "Mapping OFF";
             case "profiles":
                 return ListProfiles();
+            case "disable-all": case "disableall": case "none":
+                return DisableAll();
+            case "disable" when rest.Trim() is "--all" or "*":
+                return DisableAll();
             case "enable":
             case "disable":
             {
@@ -154,6 +159,14 @@ public sealed class CommandProcessor
         }
     }
 
+    /// <summary>Switches every profile off (mapping itself stays as it is).</summary>
+    private string DisableAll()
+    {
+        var on = _host.Profiles.Where(p => p.Enabled).ToList();
+        foreach (var p in on) _host.SetProfileEnabled(p, false);
+        return on.Count == 0 ? "No profile was enabled" : $"Disabled {on.Count} profile(s): {string.Join(", ", on.Select(p => p.Name))}";
+    }
+
     private string Status()
     {
         var sb = new StringBuilder();
@@ -173,6 +186,7 @@ public sealed class CommandProcessor
         {
             sb.Append(p.Enabled ? "[x] " : "[ ] ").Append(p.Name)
               .Append($"  ({p.Bindings.Count} binding{(p.Bindings.Count == 1 ? "" : "s")})");
+            if (p.GameType.Trim().Length > 0) sb.Append("  type: ").Append(GameTypes.Normalize(p.GameType));
             if (p.Applications.Count > 0) sb.Append("  apps: ").Append(string.Join(", ", p.Applications));
             if (p.SkipIfDevicesPresent.Count > 0) sb.Append("  skipped while connected: ").Append(string.Join(", ", p.SkipIfDevicesPresent));
             if (p.Games.Count > 0) sb.Append("  games: ").Append(string.Join(", ", p.Games));

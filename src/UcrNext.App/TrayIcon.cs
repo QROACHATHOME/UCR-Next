@@ -50,10 +50,32 @@ public sealed class TrayIcon : IDisposable
     }
 }
 
-/// <summary>Draws the app icon at runtime (a gamepad glyph), so no binary icon file is needed.</summary>
+/// <summary>The app icon (Assets\UCR-Next.ico, also the exe's icon), for window title bars and the tray.</summary>
 internal static class AppIcon
 {
+    private static readonly Uri Source = new("pack://application:,,,/Assets/UCR-Next.ico");
+
+    /// <summary>For window title bars (null if the resource can't be read).</summary>
+    public static System.Windows.Media.ImageSource? Image { get; } = LoadImage();
+
+    private static System.Windows.Media.ImageSource? LoadImage()
+    {
+        try { return System.Windows.Media.Imaging.BitmapFrame.Create(Source); }
+        catch { return null; }
+    }
+
+    /// <summary>The tray icon at the system's small-icon size; falls back to a drawn gamepad.</summary>
     public static System.Drawing.Icon Create()
+    {
+        try
+        {
+            using var stream = System.Windows.Application.GetResourceStream(Source)!.Stream;
+            return new System.Drawing.Icon(stream, System.Windows.Forms.SystemInformation.SmallIconSize);
+        }
+        catch { return Drawn(); }
+    }
+
+    private static System.Drawing.Icon Drawn()
     {
         using var bmp = new System.Drawing.Bitmap(32, 32);
         using (var g = System.Drawing.Graphics.FromImage(bmp))

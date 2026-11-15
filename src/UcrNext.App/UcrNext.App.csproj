@@ -7,7 +7,14 @@
     <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>UcrNext.App</RootNamespace>
     <AssemblyName>UCR-Next</AssemblyName>
+    <!-- The exe, taskbar, Start menu and installer icon (drawn by build\Make-Icon.ps1). -->
+    <ApplicationIcon>Assets\UCR-Next.ico</ApplicationIcon>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- Window title bars and the tray icon read it from the app's resources. -->
+    <Resource Include="Assets\UCR-Next.ico" />
+    <None Remove="Assets\UCR-Next.png" />
+  </ItemGroup>
   <ItemGroup>
     <!-- WinForms implicit usings clash with WPF type names (Application, MessageBox, Binding…). -->
     <Using Remove="System.Windows.Forms" />

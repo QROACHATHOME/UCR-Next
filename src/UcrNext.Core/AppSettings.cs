@@ -15,6 +15,12 @@ public sealed class AppSettings
     public bool ShowTrayIcon { get; set; } = true;
     /// <summary>Closing the window keeps UCR-Next running in the background.</summary>
     public bool CloseToTray { get; set; }
+    /// <summary>Minimizing the window hides it to the tray instead of the taskbar.</summary>
+    public bool MinimizeToTray { get; set; }
+    /// <summary>The profile list is shown in groups by game type.</summary>
+    public bool GroupProfilesByType { get; set; }
+    /// <summary>Play each profile's activation sound (when it has one).</summary>
+    public bool PlayActivationSounds { get; set; } = true;
     /// <summary>"System" (follow Windows), "Light" or "Dark".</summary>
     public string Theme { get; set; } = "System";
     /// <summary>Your own name, notes and picture per device, by device id.</summary>

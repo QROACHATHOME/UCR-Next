@@ -9,7 +9,8 @@ const string Usage =
     "ucrnext <command> [args]\n\n" +
     CommandProcessor.Help + "\n\n" +
     "Local commands (work without a running instance):\n" +
-    "  launch [--background] [--start]    start UCR-Next if it is not running\n" +
+    "  launch [--silent] [--start]        start UCR-Next if it is not running\n" +
+    "        --silent (or --background) = straight to the tray, no window\n" +
     "  autostart [status|off|logon|elevated]\n" +
     "        logon    = start hidden at Windows logon\n" +
     "        elevated = same, as administrator (via Task Scheduler; shows a UAC prompt)\n";

@@ -50,6 +50,7 @@ public static class Theming
         w.SetResourceReference(Control.BackgroundProperty, "ApplicationBackgroundBrush");
         w.SetResourceReference(Control.ForegroundProperty, "TextFillColorPrimaryBrush");
         w.SourceInitialized += (_, _) => UpdateTitleBar(w);
+        if (w.Icon is null && AppIcon.Image is { } icon) w.Icon = icon;
     }
 
     private static bool WindowsUsesDarkApps()

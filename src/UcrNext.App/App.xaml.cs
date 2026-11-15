@@ -6,7 +6,8 @@ namespace UcrNext.App;
 
 /// <summary>
 /// Startup options:
-///   --background   start without showing the window (tray icon only, unless --no-tray)
+///   --background   start without showing the window (tray icon only, unless --no-tray);
+///                  also --silent, --tray, -silent, /silent
 ///   --start        turn mapping on immediately
 ///   --no-tray      no notification-area icon (control it with ucrnext.exe)
 ///   --profiles DIR use another profile folder
@@ -33,12 +34,14 @@ public partial class App : Application, IControlHost
         DispatcherUnhandledException += OnUnhandled;
 
         var args = e.Args.ToList();
-        bool background = args.Contains("--background");
+        bool background = args.Any(IsSilentArg);
         bool start = args.Contains("--start");
         bool noTray = args.Contains("--no-tray");
         int pi = args.IndexOf("--profiles");
         string? profileDir = pi >= 0 && pi + 1 < args.Count ? args[pi + 1] : null;
-        string? ucrProfile = UcrCompat.ProfileArgument(args.Where((a, i) => i != pi && i != pi + 1 || pi < 0).ToList());
+        int si = args.IndexOf("--settings");
+        string settingsPath = si >= 0 && si + 1 < args.Count ? System.IO.Path.GetFullPath(args[si + 1]) : AppSettings.DefaultPath;
+        string? ucrProfile = UcrCompat.ProfileArgument(args.Where((a, i) => !(i == pi || (pi >= 0 && i == pi + 1) || i == si || (si >= 0 && i == si + 1))).ToList());
         if (ucrProfile is not null) background = true; // called like UCR.exe by a frontend: don't pop up over the game
 
         _singleInstance = new Mutex(true, @"Local\UcrNext-" + Environment.UserName, out bool first);
@@ -57,7 +60,7 @@ public partial class App : Application, IControlHost
             return;
         }
 
-        _services = new AppServices(profileDir, AppSettings.DefaultPath);
+        _services = new AppServices(profileDir, settingsPath);
         Theming.Apply(_services.Settings.Theme);
         _vm = new MainViewModel(_services);
         _services.Hooks.PanicPressed += () => Dispatcher.InvokeAsync(() =>
@@ -75,6 +78,10 @@ public partial class App : Application, IControlHost
         if (!background) ShowWindow();
     }
 
+    /// <summary>Start hidden in the tray: "--background", or the common installer-style spellings.</summary>
+    internal static bool IsSilentArg(string a) =>
+        a.TrimStart('-', '/').ToLowerInvariant() is "background" or "silent" or "tray" or "hidden" or "minimized";
+
     private void CreateTray()
     {
         if (_tray is not null || _vm is null) return;
@@ -89,6 +96,9 @@ public partial class App : Application, IControlHost
     }
 
     /// <summary>The window's close button: hide to the tray or exit.</summary>
+    /// <summary>Minimizing hides the window to the tray (setting on and a tray icon to bring it back).</summary>
+    public bool ShouldHideOnMinimize => !_quitting && _tray is not null && _services!.Settings.MinimizeToTray;
+
     public bool ShouldHideOnClose => !_quitting && _tray is not null && (_services!.Settings.CloseToTray || _startedInBackground);
 
     // ---- IControlHost (called on the UI thread) ----
@@ -124,7 +134,7 @@ public partial class App : Application, IControlHost
             MainWindow = _window;
         }
         _window.Show();
-        if (_window.WindowState == WindowState.Minimized) _window.WindowState = WindowState.Normal;
+        if (_window.WindowState == WindowState.Minimized) _window.WindowState = _window.RestoreState;
         _window.Activate();
     }
 

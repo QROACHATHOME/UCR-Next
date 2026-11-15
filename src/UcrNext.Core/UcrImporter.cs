@@ -796,6 +796,8 @@ public sealed class UcrImportResult
                 p.Games = old.Games;
                 p.SkipIfDevicesPresent = old.SkipIfDevicesPresent;
                 p.RequireDevices = old.RequireDevices;
+                p.GameType = old.GameType;
+                p.ActivationSound = old.ActivationSound;
                 // Keep the user's groups: a re-imported binding with the same name and input stays in its group.
                 p.Groups = old.Groups;
                 foreach (var b in p.Bindings)

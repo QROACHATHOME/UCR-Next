@@ -26,6 +26,61 @@ public partial class MainWindow : Window
         DataContext = vm;
         PreviewKeyDown += (_, e) => { if (e.Key == Key.F2) { ShowPanel(); e.Handled = true; } };
         vm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(MainViewModel.Selected)) AnimateProfileSwitch(); };
+        StateChanged += OnStateChanged;
+        vm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(MainViewModel.GroupProfilesByType)) ApplyProfileGrouping(); };
+        ApplyProfileGrouping();
+    }
+
+    /// <summary>View → Group profiles by game type: headings per type, profiles keep their order inside each.</summary>
+    private void ApplyProfileGrouping()
+    {
+        if (System.Windows.Data.CollectionViewSource.GetDefaultView(_vm.Profiles) is not System.Windows.Data.ListCollectionView view) return;
+        using (view.DeferRefresh())
+        {
+            view.GroupDescriptions.Clear();
+            view.LiveGroupingProperties.Clear();
+            view.LiveSortingProperties.Clear();
+            if (_vm.GroupProfilesByType)
+            {
+                view.GroupDescriptions.Add(new System.Windows.Data.PropertyGroupDescription(nameof(ProfileVm.GameTypeGroup)));
+                view.CustomSort = new ByTypeThenOrder(_vm.Profiles);
+                view.LiveGroupingProperties.Add(nameof(ProfileVm.GameTypeGroup));
+                view.LiveSortingProperties.Add(nameof(ProfileVm.GameTypeGroup));
+                view.IsLiveGrouping = true;
+                view.IsLiveSorting = true;
+            }
+            else
+            {
+                view.CustomSort = null;
+                view.IsLiveGrouping = false;
+                view.IsLiveSorting = false;
+            }
+        }
+        if (_vm.Selected is { } sel) ProfileList.ScrollIntoView(sel);
+    }
+
+    /// <summary>Game type (alphabetical, "No game type" last), then the profile's place in the list.</summary>
+    private sealed class ByTypeThenOrder(System.Collections.ObjectModel.ObservableCollection<ProfileVm> order) : System.Collections.IComparer
+    {
+        public int Compare(object? x, object? y)
+        {
+            if (x is not ProfileVm a || y is not ProfileVm b) return 0;
+            int c = GameTypes.Compare(a.GameTypeGroup, b.GameTypeGroup);
+            return c != 0 ? c : order.IndexOf(a).CompareTo(order.IndexOf(b));
+        }
+    }
+
+    /// <summary>Normal or maximized: what the window goes back to when it is shown after being minimized.</summary>
+    public WindowState RestoreState { get; private set; } = WindowState.Normal;
+
+    /// <summary>Settings → Minimize to tray: a minimized window leaves the taskbar; the tray icon brings it back.</summary>
+    private void OnStateChanged(object? sender, EventArgs e)
+    {
+        if (WindowState != WindowState.Minimized) { RestoreState = WindowState; return; }
+        if (!_app.ShouldHideOnMinimize) return;
+        // Stays minimized while hidden; App.ShowWindow restores it to RestoreState.
+        Dispatcher.BeginInvoke(() => { if (WindowState == WindowState.Minimized) Hide(); });
+        _vm.Status = "UCR-Next is in the tray — double-click its icon to bring the window back.";
     }
 
     /// <summary>Slides the bindings in when another profile is selected.</summary>
@@ -101,7 +156,8 @@ public partial class MainWindow : Window
     private void CliHelp_Click(object sender, RoutedEventArgs e) =>
         MessageBox.Show(this,
             "ucrnext.exe (next to UCR-Next.exe) controls the running app:\n\n" + CommandProcessor.Help +
-            "\n\nAlso: ucrnext launch [--background] [--start]\n      ucrnext autostart [status|off|logon|elevated]",
+            "\n\nAlso: ucrnext launch [--silent] [--start]   (--silent: straight to the tray)\n      ucrnext autostart [status|off|logon|elevated]" +
+            "\n\nUCR-Next.exe --silent starts it in the tray without showing the window.",
             "UCR-Next command line");
 
     private void Details_Click(object sender, RoutedEventArgs e) =>
@@ -201,6 +257,44 @@ public partial class MainWindow : Window
         }
         if (menu.Items.Count == 0) menu.Items.Add(new MenuItem { Header = "(no programs with windows found)", IsEnabled = false });
         menu.IsOpen = true;
+    }
+
+    private void GameTypeBox_DropDownOpened(object sender, EventArgs e) => _vm.RaiseGameTypeChoices();
+
+    /// <summary>Picking a type from the list applies at once (typed text applies when the box loses focus).</summary>
+    private void GameTypeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (sender is ComboBox box && box.SelectedItem is string type && _vm.Selected is { } p && box.IsDropDownOpen) p.GameType = type;
+    }
+
+    private void ChooseSound_Click(object sender, RoutedEventArgs e)
+    {
+        if (_vm.Selected is not { } p) return;
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = $"Sound for \"{p.Name}\"",
+            Filter = "Sound files (*.wav;*.mp3;*.wma;*.m4a;*.aac)|*.wav;*.mp3;*.wma;*.m4a;*.aac|All files|*.*",
+        };
+        if (p.HasSound && System.IO.Path.GetDirectoryName(p.ActivationSound) is { } dir && Directory.Exists(dir)) dlg.InitialDirectory = dir;
+        if (dlg.ShowDialog(this) != true) return;
+        p.ActivationSound = dlg.FileName;
+        _vm.PlaySound(dlg.FileName);
+    }
+
+    private void TestSound_Click(object sender, RoutedEventArgs e)
+    {
+        if (_vm.Selected is { HasSound: true } p) _vm.PlaySound(p.ActivationSound);
+    }
+
+    private void ClearSound_Click(object sender, RoutedEventArgs e)
+    {
+        if (_vm.Selected is { } p) p.ActivationSound = "";
+    }
+
+    private void Wizard_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new ProfileWizard(_vm) { Owner = this };
+        if (dlg.ShowDialog() == true && dlg.Result is { } profile) _vm.AddWizardProfile(profile);
     }
 
     // ---- Devices list ----

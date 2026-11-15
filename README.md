@@ -128,9 +128,17 @@ the drivers you need (see Requirements):
 - **Wait until its controllers are connected** (per profile): the profile stays off until every
   controller its bindings read is plugged in, so a virtual pad never takes an Xbox slot ahead of a
   real pad that's still missing.
+- **Profile wizard** (*File → New profile with the wizard*, or the wand above the profile list): name and
+  game type, then what your controls should act as — an **Xbox 360 controller** or **keyboard keys**
+  (MAME's default keys for player 1 or 2, each one changeable) — then press each control when asked.
+  An arcade stick's direction buttons become a proper stick axis. Skip the controls you don't have.
+- **Game types**: tag a profile *Racing*, *Light gun*, *Fighting*… (or your own), and tick
+  *Group by game type* to list the profiles under a heading per type
+- **Sound when a profile becomes active** (per profile, wav/mp3/…), e.g. when its game comes to the front
 - **Games list per profile**, plus `ucrnext game "<name>"` to switch to the right profile from a launcher
 - **UCR import**: *File → Import UCR profiles* reads UCR's `context.xml` (see below)
-- **Background mode**: tray icon (optional), start hidden at Windows logon, optionally as administrator
+- **Background mode**: tray icon (optional), start hidden at Windows logon (optionally as administrator)
+  or with `--silent`, minimize to the tray instead of the taskbar
 - **Command line**: `ucrnext.exe status | start | stop | enable <profile> | solo <profile> | …`
 - **Save, Revert, Undo**: edits take effect at once so you can try them, but are only written to disk
   when you **Save** (Ctrl+S). **Revert** goes back to the saved profiles; **Undo / Redo** (Ctrl+Z / Ctrl+Y)
@@ -220,10 +228,11 @@ It downloads Microsoft's .NET 8 Desktop Runtime installer once (cached for 30 da
 
 | Option | Effect |
 |---|---|
-| `--background` | start without showing the window |
+| `--silent` | start straight in the tray, never showing the window (same as `--background`; `/silent`, `--tray`, `--hidden` work too) |
 | `--start` | turn mapping on immediately |
 | `--no-tray` | no tray icon (control it with `ucrnext.exe`) |
 | `--profiles DIR` | use another profile folder |
+| `--settings FILE` | use another settings file (e.g. for a test copy) |
 
 Only one instance runs per user. Launching it again shows the existing window (or, with `--start`,
 turns mapping on) and exits.
@@ -239,6 +248,7 @@ ucrnext profiles               list profiles ([x] = enabled, apps they are limit
 ucrnext enable <profile>       enable a profile   (case-insensitive, unique prefix is enough,
 ucrnext disable <profile>      disable a profile   quote names with spaces)
 ucrnext solo <profile>         enable only this profile
+ucrnext disable-all            switch every profile off (also: none, disable --all); mapping stays as it is
 ucrnext ucr "Parent,Child"     like UCR.exe --profile: only that profile, mapping on
 ucrnext games                  list games and the profiles they use
 ucrnext game <game> [--start]  enable only the profile(s) listing this game (exact, or unique partial name)
@@ -248,7 +258,7 @@ ucrnext reload                 reload profiles from disk (after editing the JSON
 ucrnext show | hide            show or hide the window
 ucrnext quit [--save|--discard]  exit UCR-Next (with unsaved edits it refuses unless told what to do with them)
 
-ucrnext launch [--background] [--start]           start UCR-Next if it is not running
+ucrnext launch [--silent] [--start]               start UCR-Next if it is not running (--silent: tray only)
 ucrnext autostart [status|off|logon|elevated]     start with Windows
 ```
 
@@ -302,10 +312,16 @@ Older ids such as `dinput:VID:PID#2` (from earlier versions and from UCR imports
 mean the n-th of the identical devices in key order. Bind again, or use a device slot, to get the
 stable id. After updating, check once that identical devices are the right way round.
 
-## Profile settings: programs, games, devices
+## Profile settings: game type, sound, programs, games, devices
 
 Expand **Profile settings** above the bindings list:
 
+- **Game type** — pick *Racing*, *Light gun*, *Fighting*, *Flight*… or type your own. It shows as a tag
+  in the profile list, and *Group by game type* (above the list, or the *View* menu) lists the profiles
+  under a heading per type, keeping their order inside each.
+- **Sound when active** — a sound file played each time the profile becomes active while mapping is on:
+  when mapping starts, when it is switched on, or when its program comes to the front. ▶ plays it now.
+  *Settings → Play profile activation sounds* turns all of them off.
 - **Only active while these programs are in front** — `game.exe, emulator.exe`; empty = everywhere.
 - **Games that use this profile** — one per line, free text. Shown in the profile list and used by
   `ucrnext game "Daytona USA" --start`, which enables exactly the profile(s) listing that game.
@@ -391,10 +407,18 @@ your keyboard, mouse, or desktop, so a service can neither read your physical in
 key presses to your games. The logon task gives the same "always on, no window" behaviour while
 running on your desktop where remapping works.
 
+To start it hidden yourself (a launcher, a shortcut): `UCR-Next.exe --silent`, or `ucrnext launch --silent`.
+It goes straight to the tray; the window is never shown.
+
 Related settings: *Start mapping when UCR-Next starts*, *Show tray icon*, *Keep running in the tray
-when the window is closed*. Settings are stored in `%APPDATA%\UCR-Next\settings.json`.
+when the window is closed*, *Minimize to the tray (not the taskbar)* — the minimize button then hides
+the window, and double-clicking the tray icon brings it back as it was. Settings are stored in
+`%APPDATA%\UCR-Next\settings.json`.
 
 ## Quick start
+
+The easiest way: **File → New profile with the wizard**, then press each control when it asks.
+By hand:
 
 1. Plug in your controller; it appears under **Detected devices**.
 2. **+ Binding**, press **A** on the pad, choose **Key: Space** as output.

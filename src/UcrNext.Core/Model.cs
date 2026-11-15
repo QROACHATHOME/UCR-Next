@@ -424,6 +424,10 @@ public sealed class Profile
     public bool RequireDevices { get; set; }
     /// <summary>Free-form list of games that use this profile (shown in the UI, used by "ucrnext game").</summary>
     public List<string> Games { get; set; } = new();
+    /// <summary>Kind of game ("Racing", "Light gun"…, see <see cref="GameTypes"/>; any text allowed). Empty = none. Groups the profile list.</summary>
+    public string GameType { get; set; } = "";
+    /// <summary>Sound file (wav, mp3, wma…) played each time the profile becomes active while mapping is on. Empty = none.</summary>
+    public string ActivationSound { get; set; } = "";
     public List<Binding> Bindings { get; set; } = new();
     /// <summary>Groups the bindings are organised in (in display order).</summary>
     public List<BindingGroup> Groups { get; set; } = new();
